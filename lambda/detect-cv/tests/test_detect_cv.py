@@ -106,3 +106,33 @@ def test_unchecked_when_external_line_passes_through():
     cv2.line(gray, (0, 60), (299, 60), color=0, thickness=2)
 
     assert is_checked(gray, (50, 50, 20, 20)) is False
+
+
+import pytest
+
+from detect_cv import detect_checkboxes
+
+
+def test_detect_checkboxes_end_to_end():
+    gray = make_blank_gray(300, 300)
+    cv2.rectangle(gray, (50, 50), (70, 70), color=0, thickness=2)  # unchecked, near top
+    cv2.rectangle(gray, (50, 150), (70, 170), color=0, thickness=2)  # checked, below it
+    cv2.line(gray, (53, 153), (67, 167), color=0, thickness=2)
+    cv2.line(gray, (53, 167), (67, 153), color=0, thickness=2)
+
+    bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+    success, encoded = cv2.imencode(".png", bgr)
+    assert success
+    image_bytes = encoded.tobytes()
+
+    boxes = detect_checkboxes(image_bytes)
+
+    assert len(boxes) == 2
+    assert boxes[0]["bbox"][1] < boxes[1]["bbox"][1]
+    assert boxes[0]["is_checked"] is False
+    assert boxes[1]["is_checked"] is True
+
+
+def test_detect_checkboxes_raises_on_undecodable_bytes():
+    with pytest.raises(ValueError):
+        detect_checkboxes(b"not an image")

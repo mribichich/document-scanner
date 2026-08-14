@@ -133,3 +133,36 @@ def is_checked(gray: np.ndarray, box: tuple[int, int, int, int]) -> bool:
     if _ink_ratio(gray, box) < INK_RATIO_THRESHOLD:
         return False
     return _mark_is_contained(gray, box)
+
+
+def decode_image(image_bytes: bytes) -> np.ndarray:
+    arr = np.frombuffer(image_bytes, dtype=np.uint8)
+    image = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if image is None:
+        raise ValueError("could not decode image")
+    return image
+
+
+def _sort_reading_order(
+    boxes: list[tuple[int, int, int, int]]
+) -> list[tuple[int, int, int, int]]:
+    return sorted(boxes, key=lambda b: (b[1], b[0]))
+
+
+def detect_checkboxes(image_bytes: bytes) -> list[dict]:
+    image = decode_image(image_bytes)
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    candidates = find_checkbox_candidates(gray)
+    candidates = deduplicate_boxes(candidates)
+    candidates = _sort_reading_order(candidates)
+
+    boxes = []
+    for (x, y, w, h) in candidates:
+        boxes.append(
+            {
+                "bbox": [x, y, x + w, y + h],
+                "is_checked": is_checked(gray, (x, y, w, h)),
+            }
+        )
+    return boxes
