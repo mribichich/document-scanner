@@ -68,3 +68,68 @@ def deduplicate_boxes(
         kept.append(box)
 
     return kept
+
+
+INK_RATIO_THRESHOLD = 0.08
+INTERIOR_MARGIN = 3
+CONTAINMENT_PADDING_FACTOR = 2.0
+CONTAINMENT_EXTENT_RATIO = 1.75
+
+
+def _ink_ratio(
+    gray: np.ndarray, box: tuple[int, int, int, int], margin: int = INTERIOR_MARGIN
+) -> float:
+    x, y, w, h = box
+    x1, y1 = x + margin, y + margin
+    x2, y2 = x + w - margin, y + h - margin
+    if x2 <= x1 or y2 <= y1:
+        return 0.0
+
+    interior = gray[y1:y2, x1:x2]
+    _, binary = cv2.threshold(interior, BINARY_THRESHOLD, 255, cv2.THRESH_BINARY_INV)
+    dark_pixels = int(np.count_nonzero(binary))
+    total_pixels = binary.size
+    if total_pixels == 0:
+        return 0.0
+    return dark_pixels / total_pixels
+
+
+def _mark_is_contained(gray: np.ndarray, box: tuple[int, int, int, int]) -> bool:
+    x, y, w, h = box
+    pad_x = int(w * CONTAINMENT_PADDING_FACTOR)
+    pad_y = int(h * CONTAINMENT_PADDING_FACTOR)
+
+    region_x1 = max(0, x - pad_x)
+    region_y1 = max(0, y - pad_y)
+    region_x2 = min(gray.shape[1], x + w + pad_x)
+    region_y2 = min(gray.shape[0], y + h + pad_y)
+
+    region = gray[region_y1:region_y2, region_x1:region_x2]
+    _, binary = cv2.threshold(region, BINARY_THRESHOLD, 255, cv2.THRESH_BINARY_INV)
+
+    _, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
+
+    box_x1 = x - region_x1
+    box_y1 = y - region_y1
+    box_x2 = box_x1 + w
+    box_y2 = box_y1 + h
+
+    box_labels = set(np.unique(labels[box_y1:box_y2, box_x1:box_x2]))
+    box_labels.discard(0)  # background label
+
+    if not box_labels:
+        return False
+
+    for label in box_labels:
+        comp_w = stats[label, cv2.CC_STAT_WIDTH]
+        comp_h = stats[label, cv2.CC_STAT_HEIGHT]
+        if comp_w > w * CONTAINMENT_EXTENT_RATIO or comp_h > h * CONTAINMENT_EXTENT_RATIO:
+            return False
+
+    return True
+
+
+def is_checked(gray: np.ndarray, box: tuple[int, int, int, int]) -> bool:
+    if _ink_ratio(gray, box) < INK_RATIO_THRESHOLD:
+        return False
+    return _mark_is_contained(gray, box)
