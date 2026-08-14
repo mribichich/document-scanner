@@ -1,0 +1,21 @@
+# Terraform
+infra/.terraform/
+infra/*.tfstate
+infra/*.tfstate.*
+infra/build/
+infra/crash.log
+infra/*.tfvars
+!infra/*.tfvars.example
+
+# Go
+lambda/**/bootstrap
+lambda/**/*.zip
+
+# Python
+lambda/**/venv/
+lambda/**/__pycache__/
+lambda/**/*.pyc
+.pytest_cache/
+
+# OS
+.DS_Store
