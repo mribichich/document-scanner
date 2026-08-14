@@ -118,10 +118,23 @@ def _mark_is_contained(gray: np.ndarray, box: tuple[int, int, int, int]) -> bool
 
     _, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
 
-    box_x1 = x - region_x1
-    box_y1 = y - region_y1
-    box_x2 = box_x1 + w
-    box_y2 = box_y1 + h
+    # Sample components from the box's *interior* (inset by the same margin
+    # used for ink-ratio measurement), not the full bounding box. The full
+    # box includes the checkbox's own drawn border, which can be
+    # 8-connected to neighboring structure it happens to touch or overlap
+    # (e.g. a ruled table gridline the checkbox sits against) without that
+    # structure being part of the mark itself. A component that only
+    # reaches the box via its border/edge pixels is not "the mark"; a
+    # component that reaches into the true interior is. This still catches
+    # a stroke that genuinely passes through the box (it necessarily
+    # crosses the interior, not just the edge).
+    box_x1 = x - region_x1 + INTERIOR_MARGIN
+    box_y1 = y - region_y1 + INTERIOR_MARGIN
+    box_x2 = box_x1 + w - 2 * INTERIOR_MARGIN
+    box_y2 = box_y1 + h - 2 * INTERIOR_MARGIN
+
+    if box_x2 <= box_x1 or box_y2 <= box_y1:
+        return False
 
     box_labels = set(np.unique(labels[box_y1:box_y2, box_x1:box_x2]))
     box_labels.discard(0)  # background label
