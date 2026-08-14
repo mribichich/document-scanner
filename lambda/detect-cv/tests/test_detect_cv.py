@@ -56,3 +56,24 @@ def test_rejects_circle():
     candidates = find_checkbox_candidates(gray)
 
     assert len(candidates) == 0
+
+
+from detect_cv import deduplicate_boxes
+
+
+def test_drops_nested_duplicate_keeping_outer():
+    outer = (50, 50, 20, 20)
+    inner = (52, 52, 16, 16)
+
+    result = deduplicate_boxes([outer, inner])
+
+    assert result == [outer]
+
+
+def test_keeps_non_overlapping_boxes():
+    box_a = (10, 10, 20, 20)
+    box_b = (100, 100, 20, 20)
+
+    result = deduplicate_boxes([box_a, box_b])
+
+    assert sorted(result) == sorted([box_a, box_b])
