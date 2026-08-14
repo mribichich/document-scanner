@@ -7,6 +7,7 @@ MAX_BOX_SIZE = 60
 ASPECT_RATIO_MIN = 0.7
 ASPECT_RATIO_MAX = 1.3
 CORNER_EPSILON_FACTOR = 0.04
+MIN_EXTENT_RATIO = 0.6
 
 
 def find_checkbox_candidates(gray: np.ndarray) -> list[tuple[int, int, int, int]]:
@@ -24,6 +25,14 @@ def find_checkbox_candidates(gray: np.ndarray) -> list[tuple[int, int, int, int]
         perimeter = cv2.arcLength(contour, True)
         approx = cv2.approxPolyDP(contour, CORNER_EPSILON_FACTOR * perimeter, True)
         if len(approx) != 4:
+            continue
+        # A real checkbox's contour (the outer or inner edge of a drawn
+        # square) fills nearly all of its own bounding box. A text glyph
+        # (e.g. "v", "o") can coincidentally have a square-ish, 4-corner
+        # bounding box at certain sizes, but its actual ink covers far less
+        # of that box — reject those low-rectangularity contours here.
+        extent = cv2.contourArea(contour) / (w * h) if w * h else 0.0
+        if extent < MIN_EXTENT_RATIO:
             continue
         candidates.append((x, y, w, h))
     return candidates
