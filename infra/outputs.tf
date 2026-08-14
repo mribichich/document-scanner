@@ -8,6 +8,11 @@ output "detect_endpoint" {
   value       = "${aws_apigatewayv2_api.http_api.api_endpoint}/detect"
 }
 
+output "detect_textract_endpoint" {
+  description = "Full URL of the POST /detect-textract endpoint (Textract-based)"
+  value       = "${aws_apigatewayv2_api.http_api.api_endpoint}/detect-textract"
+}
+
 output "lambda_function_name" {
   description = "Name of the deployed Lambda function"
   value       = aws_lambda_function.detect.function_name

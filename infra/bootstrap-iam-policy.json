@@ -87,6 +87,18 @@
         "textract:DetectDocumentText"
       ],
       "Resource": "*"
+    },
+    {
+      "Sid": "EcrAuth",
+      "Effect": "Allow",
+      "Action": "ecr:GetAuthorizationToken",
+      "Resource": "*"
+    },
+    {
+      "Sid": "EcrManageDetectCvRepo",
+      "Effect": "Allow",
+      "Action": "ecr:*",
+      "Resource": "arn:aws:ecr:*:*:repository/document-scanner-*"
     }
   ]
 }

@@ -107,7 +107,7 @@ resource "aws_apigatewayv2_integration" "detect" {
 
 resource "aws_apigatewayv2_route" "detect" {
   api_id    = aws_apigatewayv2_api.http_api.id
-  route_key = "POST /detect"
+  route_key = "POST /detect-textract"
   target    = "integrations/${aws_apigatewayv2_integration.detect.id}"
 }
 
