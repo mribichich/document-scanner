@@ -12,6 +12,30 @@ variable "github_repo" {
   default     = "mribichich/document-scanner"
 }
 
+# GitHub's OIDC token `sub` claim is NOT the plain "owner/repo" name — it's
+# "owner@<owner_id>/repo@<repo_id>", using GitHub's permanent numeric IDs
+# for the account and repository rather than their (renameable/
+# transferable) names. Confirmed empirically by decoding a real token from
+# this repo's own Actions run (a plain-name trust condition was tried
+# first and consistently rejected by AWS with "Not authorized to perform
+# sts:AssumeRoleWithWebIdentity" — the token's actual sub claim was
+# "repo:mribichich@5748554/document-scanner@1333334483:ref:refs/heads/main").
+# Using the ID-qualified form here (rather than a wildcard around the
+# names) keeps the trust condition an exact match — a wildcard like
+# "mribichich*" would also match unrelated accounts whose name happens to
+# start with the same prefix.
+variable "github_owner_id" {
+  description = "GitHub numeric user/org ID for github_repo's owner (permanent, survives renames)"
+  type        = string
+  default     = "5748554"
+}
+
+variable "github_repo_id" {
+  description = "GitHub numeric repository ID for github_repo (permanent, survives renames/transfers)"
+  type        = string
+  default     = "1333334483"
+}
+
 resource "aws_iam_openid_connect_provider" "github_actions" {
   url            = "https://token.actions.githubusercontent.com"
   client_id_list = ["sts.amazonaws.com"]
@@ -41,7 +65,7 @@ resource "aws_iam_role" "github_actions_deploy" {
           "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
         }
         StringLike = {
-          "token.actions.githubusercontent.com:sub" = "repo:${var.github_repo}:ref:refs/heads/main"
+          "token.actions.githubusercontent.com:sub" = "repo:${split("/", var.github_repo)[0]}@${var.github_owner_id}/${split("/", var.github_repo)[1]}@${var.github_repo_id}:ref:refs/heads/main"
         }
       }
     }]

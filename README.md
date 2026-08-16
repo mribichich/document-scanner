@@ -104,11 +104,15 @@ asdf itself first, then:
 asdf plugin add golang
 asdf plugin add terraform
 asdf plugin add awscli
+asdf plugin add python
+asdf plugin add github-cli
 asdf install
 ```
 
-This installs the exact Go, Terraform, and AWS CLI versions listed in
-`.tool-versions`.
+This installs the exact Go, Terraform, AWS CLI, Python, and GitHub CLI
+versions listed in `.tool-versions`. GitHub CLI (`gh`) isn't required to
+develop or deploy this project — it's only used for inspecting GitHub
+Actions runs (see "CI/CD" below) and is optional.
 
 ### Docker
 
@@ -336,23 +340,37 @@ of the two deployed routes.
 job assumes an IAM role (`document-scanner-dev-github-actions-deploy`,
 defined in `infra/github_oidc.tf`) directly via GitHub's OIDC token
 federation. That role's trust policy is scoped to this exact repo and the
-`main` branch only (`repo:mribichich/document-scanner:ref:refs/heads/main`)
-— a workflow run from a fork or any other branch cannot assume it, and
-there's no long-lived secret that could leak. The role has the same deploy
-permissions as the human bootstrap user (`infra/bootstrap-iam-policy.json`,
-attached to both), so CI can run the exact `terraform apply` a human
-deployer would.
+`main` branch only — a workflow run from a fork or any other branch cannot
+assume it, and there's no long-lived secret that could leak. The role has
+the same deploy permissions as the human bootstrap user
+(`infra/bootstrap-iam-policy.json`, attached to both), so CI can run the
+exact `terraform apply` a human deployer would.
+
+> **Gotcha:** the trust condition matches on the token's `sub` claim, and
+> GitHub's actual `sub` format is **not** the plain `repo:owner/repo:ref:...`
+> commonly shown in examples — it's
+> `repo:owner@<owner_id>/repo@<repo_id>:ref:refs/heads/main`, using GitHub's
+> permanent numeric IDs for the account and repo rather than their
+> (renameable/transferable) names. A plain-name trust condition was tried
+> first here and consistently failed with `Not authorized to perform
+> sts:AssumeRoleWithWebIdentity` — diagnosed by adding a temporary workflow
+> step that decoded and printed the actual token's claims. `github_owner_id`
+> / `github_repo_id` in `infra/github_oidc.tf` hold the real values for this
+> repo; if this ever needs debugging again, decode a live token rather than
+> trusting the commonly-documented plain-name format.
 
 **One-time setup, already done for this repo** (documented here in case
 this is ever forked/re-bootstrapped): the OIDC provider and role are
 Terraform-managed (`infra/github_oidc.tf`), applied the same way as
 everything else in `infra/` — no separate manual AWS Console step beyond
 what "AWS account setup" above already covers. If you fork this repo and
-want your own fork to deploy, update the `github_repo` variable's default
-in `infra/github_oidc.tf` (or set it via `-var`) to your fork's
-`owner/repo` before applying, and update the hardcoded `role-to-assume`
-ARN in `.github/workflows/deploy.yml` to match your own AWS account ID
-once the role exists (`terraform output github_actions_deploy_role_arn`).
+want your own fork to deploy: update `github_repo`, `github_owner_id`, and
+`github_repo_id` in `infra/github_oidc.tf` to your fork's values (find your
+repo's numeric ID via `gh api repos/OWNER/REPO --jq .id` and your account's
+via `gh api users/OWNER --jq .id`) before applying, and update the
+hardcoded `role-to-assume` ARN in `.github/workflows/deploy.yml` to match
+your own AWS account ID once the role exists
+(`terraform output github_actions_deploy_role_arn`).
 
 ## Testing
 
