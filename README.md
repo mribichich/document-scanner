@@ -606,7 +606,20 @@ priority order:
   classification signal) was deliberately not built, since the simpler
   containment check already resolved both known failure cases on the 4
   samples. Revisit if a document with a harder version of the
-  "unrelated mark near a checkbox" problem is encountered.
+  "unrelated mark near a checkbox" problem is encountered. **Specific,
+  currently-untested gap** (found via an audit against
+  `docs/chatgpt.md`): `is_checked()` requires ink coverage above a
+  threshold and that the ink's connected component isn't much larger
+  than the box (`CONTAINMENT_EXTENT_RATIO`), but has no shape/structure
+  requirement — an isolated dust speck, hole-punch shadow, or print
+  artifact that's fully contained inside a checkbox and covers enough of
+  the interior would currently be classified `checked`, which
+  Hough-line diagonal detection would have correctly rejected (no line
+  structure) but the containment check does not. No test exercises this
+  case in either direction (`tests/test_detect_cv.py` only covers an
+  X-mark and a border-to-border passing line). Add a targeted test case
+  before trusting this pipeline on documents beyond the 4 current
+  samples.
 - **Retiring `/detect-textract`:** deliberately deferred — see
   `docs/superpowers/specs/2026-08-14-cv-checkbox-detection-design.md`
   ("Open questions"). Keep both endpoints live until there's enough
