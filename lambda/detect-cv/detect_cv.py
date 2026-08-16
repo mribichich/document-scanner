@@ -1,13 +1,39 @@
 import cv2
 import numpy as np
 
-BINARY_THRESHOLD = 200
 MIN_BOX_SIZE = 22
 MAX_BOX_SIZE = 60
 ASPECT_RATIO_MIN = 0.7
 ASPECT_RATIO_MAX = 1.3
 CORNER_EPSILON_FACTOR = 0.04
 MIN_EXTENT_RATIO = 0.6
+
+# A single fixed global brightness cutoff (the previous approach: any pixel
+# darker than a flat value is "ink," everywhere on the page) breaks in two
+# opposite ways real scanned forms exhibit: a lightly-drawn border can be
+# lighter than the cutoff (never registers as ink at all), and a shaded
+# table-row background can be darker than the cutoff (the whole cell reads
+# as ink and fuses with the border into one oversized blob). Adaptive
+# thresholding compares each pixel to the mean of its own local
+# neighborhood instead of one global value, so it tracks a lighter border
+# against white paper and a normal-darkness border against a shaded cell
+# equally, without needing a value tuned to either. Verified empirically
+# against all 4 real samples: adaptive thresholding alone is a strict
+# superset of the old global threshold's candidates (zero candidates the
+# global pass found that adaptive misses, across appraisal-1/2/3/4), while
+# also recovering 18 checkboxes on shaded rows (appraisal-3) and 2 more
+# fusing with adjacent text (appraisal-4) that the global threshold missed
+# entirely. See docs/algorithm-known-issues.md issues #1/#2/#6.
+ADAPTIVE_BLOCK_SIZE = 51
+ADAPTIVE_C = 10
+
+
+def _adaptive_binary(gray: np.ndarray) -> np.ndarray:
+    return cv2.adaptiveThreshold(
+        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV,
+        ADAPTIVE_BLOCK_SIZE, ADAPTIVE_C,
+    )
+
 
 # Defensive limits for decode_image, guarding against a decompression-bomb
 # style upload on the public /detect endpoint: a small, highly-compressible
@@ -92,7 +118,7 @@ def _probe_dimensions(image_bytes: bytes) -> tuple[int, int] | None:
 
 
 def find_checkbox_candidates(gray: np.ndarray) -> list[tuple[int, int, int, int]]:
-    _, binary = cv2.threshold(gray, BINARY_THRESHOLD, 255, cv2.THRESH_BINARY_INV)
+    binary = _adaptive_binary(gray)
     contours, _ = cv2.findContours(binary, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
 
     candidates = []
@@ -172,7 +198,7 @@ CONTAINMENT_INTERIOR_RATIO = 0.2
 
 
 def _ink_ratio(
-    gray: np.ndarray, box: tuple[int, int, int, int], margin: int = INTERIOR_MARGIN
+    binary_full: np.ndarray, box: tuple[int, int, int, int], margin: int = INTERIOR_MARGIN
 ) -> float:
     x, y, w, h = box
     x1, y1 = x + margin, y + margin
@@ -180,27 +206,25 @@ def _ink_ratio(
     if x2 <= x1 or y2 <= y1:
         return 0.0
 
-    interior = gray[y1:y2, x1:x2]
-    _, binary = cv2.threshold(interior, BINARY_THRESHOLD, 255, cv2.THRESH_BINARY_INV)
-    dark_pixels = int(np.count_nonzero(binary))
-    total_pixels = binary.size
+    interior = binary_full[y1:y2, x1:x2]
+    dark_pixels = int(np.count_nonzero(interior))
+    total_pixels = interior.size
     if total_pixels == 0:
         return 0.0
     return dark_pixels / total_pixels
 
 
-def _mark_is_contained(gray: np.ndarray, box: tuple[int, int, int, int]) -> bool:
+def _mark_is_contained(binary_full: np.ndarray, box: tuple[int, int, int, int]) -> bool:
     x, y, w, h = box
     pad_x = int(w * CONTAINMENT_PADDING_FACTOR)
     pad_y = int(h * CONTAINMENT_PADDING_FACTOR)
 
     region_x1 = max(0, x - pad_x)
     region_y1 = max(0, y - pad_y)
-    region_x2 = min(gray.shape[1], x + w + pad_x)
-    region_y2 = min(gray.shape[0], y + h + pad_y)
+    region_x2 = min(binary_full.shape[1], x + w + pad_x)
+    region_y2 = min(binary_full.shape[0], y + h + pad_y)
 
-    region = gray[region_y1:region_y2, region_x1:region_x2]
-    _, binary = cv2.threshold(region, BINARY_THRESHOLD, 255, cv2.THRESH_BINARY_INV)
+    binary = binary_full[region_y1:region_y2, region_x1:region_x2]
 
     _, labels, _, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
 
@@ -272,10 +296,10 @@ def _mark_is_contained(gray: np.ndarray, box: tuple[int, int, int, int]) -> bool
     return True
 
 
-def is_checked(gray: np.ndarray, box: tuple[int, int, int, int]) -> bool:
-    if _ink_ratio(gray, box) < INK_RATIO_THRESHOLD:
+def is_checked(binary_full: np.ndarray, box: tuple[int, int, int, int]) -> bool:
+    if _ink_ratio(binary_full, box) < INK_RATIO_THRESHOLD:
         return False
-    return _mark_is_contained(gray, box)
+    return _mark_is_contained(binary_full, box)
 
 
 def decode_image(image_bytes: bytes) -> np.ndarray:
@@ -322,12 +346,17 @@ def detect_checkboxes(image_bytes: bytes) -> list[dict]:
     candidates = deduplicate_boxes(candidates)
     candidates = _sort_reading_order(candidates)
 
+    # Computed once and reused for every box's classification below, rather
+    # than re-running adaptiveThreshold per box (it's a full-image op; with
+    # ~100+ candidates per page, recomputing it per box would be wasteful).
+    binary_full = _adaptive_binary(gray)
+
     boxes = []
     for (x, y, w, h) in candidates:
         boxes.append(
             {
                 "bbox": [x, y, x + w, y + h],
-                "is_checked": is_checked(gray, (x, y, w, h)),
+                "is_checked": is_checked(binary_full, (x, y, w, h)),
             }
         )
     return boxes

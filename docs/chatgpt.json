@@ -1,0 +1,1111 @@
+{
+  "boxes": [
+    {
+      "bbox": [
+        321,
+        300,
+        338,
+        315
+      ],
+      "is_checked": true
+    },
+    {
+      "bbox": [
+        369,
+        300,
+        387,
+        315
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        419,
+        300,
+        436,
+        315
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        690,
+        300,
+        708,
+        315
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        841,
+        300,
+        858,
+        315
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        905,
+        300,
+        922,
+        315
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        385,
+        316,
+        402,
+        330
+      ],
+      "is_checked": true
+    },
+    {
+      "bbox": [
+        467,
+        316,
+        485,
+        330
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        543,
+        316,
+        561,
+        330
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        354,
+        331,
+        372,
+        346
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        464,
+        331,
+        481,
+        346
+      ],
+      "is_checked": true
+    },
+    {
+      "bbox": [
+        573,
+        331,
+        590,
+        346
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        841,
+        362,
+        858,
+        376
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        886,
+        362,
+        904,
+        376
+      ],
+      "is_checked": true
+    },
+    {
+      "bbox": [
+        286,
+        408,
+        304,
+        423
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        328,
+        408,
+        346,
+        423
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        709,
+        455,
+        726,
+        469
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        754,
+        455,
+        772,
+        469
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        886,
+        470,
+        904,
+        484
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        932,
+        470,
+        949,
+        484
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        313,
+        563,
+        331,
+        577
+      ],
+      "is_checked": true
+    },
+    {
+      "bbox": [
+        370,
+        563,
+        388,
+        577
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        427,
+        563,
+        445,
+        577
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        550,
+        563,
+        568,
+        577
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        619,
+        563,
+        636,
+        577
+      ],
+      "is_checked": true
+    },
+    {
+      "bbox": [
+        681,
+        563,
+        699,
+        577
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        313,
+        578,
+        331,
+        593
+      ],
+      "is_checked": true
+    },
+    {
+      "bbox": [
+        370,
+        578,
+        388,
+        593
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        427,
+        578,
+        445,
+        593
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        550,
+        578,
+        568,
+        593
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        619,
+        578,
+        636,
+        593
+      ],
+      "is_checked": true
+    },
+    {
+      "bbox": [
+        681,
+        578,
+        699,
+        593
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        313,
+        594,
+        331,
+        608
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        370,
+        594,
+        388,
+        608
+      ],
+      "is_checked": true
+    },
+    {
+      "bbox": [
+        427,
+        594,
+        445,
+        608
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        550,
+        594,
+        568,
+        608
+      ],
+      "is_checked": true
+    },
+    {
+      "bbox": [
+        619,
+        594,
+        636,
+        608
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        681,
+        594,
+        699,
+        608
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        362,
+        764,
+        379,
+        778
+      ],
+      "is_checked": true
+    },
+    {
+      "bbox": [
+        422,
+        764,
+        440,
+        778
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        626,
+        764,
+        643,
+        778
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        701,
+        764,
+        719,
+        778
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        738,
+        779,
+        756,
+        793
+      ],
+      "is_checked": true
+    },
+    {
+      "bbox": [
+        778,
+        779,
+        795,
+        793
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        343,
+        824,
+        364,
+        840
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        326,
+        825,
+        344,
+        840
+      ],
+      "is_checked": true
+    },
+    {
+      "bbox": [
+        364,
+        825,
+        381,
+        840
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        548,
+        825,
+        566,
+        840
+      ],
+      "is_checked": true
+    },
+    {
+      "bbox": [
+        586,
+        825,
+        604,
+        840
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        869,
+        825,
+        886,
+        840
+      ],
+      "is_checked": true
+    },
+    {
+      "bbox": [
+        922,
+        825,
+        940,
+        840
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        343,
+        840,
+        364,
+        856
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        326,
+        841,
+        344,
+        855
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        364,
+        841,
+        381,
+        855
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        548,
+        841,
+        566,
+        855
+      ],
+      "is_checked": true
+    },
+    {
+      "bbox": [
+        586,
+        841,
+        604,
+        855
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        869,
+        841,
+        886,
+        855
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        922,
+        841,
+        940,
+        855
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        415,
+        856,
+        432,
+        871
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        460,
+        856,
+        477,
+        871
+      ],
+      "is_checked": true
+    },
+    {
+      "bbox": [
+        588,
+        872,
+        606,
+        886
+      ],
+      "is_checked": true
+    },
+    {
+      "bbox": [
+        637,
+        872,
+        655,
+        886
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        780,
+        887,
+        798,
+        902
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        822,
+        887,
+        839,
+        902
+      ],
+      "is_checked": true
+    },
+    {
+      "bbox": [
+        315,
+        963,
+        337,
+        980
+      ],
+      "is_checked": true
+    },
+    {
+      "bbox": [
+        298,
+        964,
+        315,
+        979
+      ],
+      "is_checked": true
+    },
+    {
+      "bbox": [
+        336,
+        964,
+        353,
+        979
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        450,
+        964,
+        468,
+        979
+      ],
+      "is_checked": true
+    },
+    {
+      "bbox": [
+        537,
+        964,
+        555,
+        979
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        450,
+        980,
+        468,
+        994
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        537,
+        980,
+        555,
+        994
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        315,
+        994,
+        337,
+        1011
+      ],
+      "is_checked": true
+    },
+    {
+      "bbox": [
+        352,
+        994,
+        370,
+        1011
+      ],
+      "is_checked": true
+    },
+    {
+      "bbox": [
+        298,
+        995,
+        315,
+        1010
+      ],
+      "is_checked": true
+    },
+    {
+      "bbox": [
+        336,
+        995,
+        353,
+        1010
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        369,
+        995,
+        387,
+        1010
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        273,
+        1011,
+        290,
+        1025
+      ],
+      "is_checked": true
+    },
+    {
+      "bbox": [
+        322,
+        1011,
+        339,
+        1025
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        377,
+        1011,
+        394,
+        1025
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        450,
+        1026,
+        468,
+        1040
+      ],
+      "is_checked": true
+    },
+    {
+      "bbox": [
+        545,
+        1026,
+        562,
+        1040
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        502,
+        1042,
+        519,
+        1056
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        880,
+        1042,
+        898,
+        1056
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        450,
+        1057,
+        468,
+        1071
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        513,
+        1057,
+        530,
+        1071
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        820,
+        1057,
+        837,
+        1071
+      ],
+      "is_checked": true
+    },
+    {
+      "bbox": [
+        363,
+        1072,
+        380,
+        1087
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        483,
+        1072,
+        500,
+        1087
+      ],
+      "is_checked": true
+    },
+    {
+      "bbox": [
+        524,
+        1072,
+        542,
+        1087
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        571,
+        1072,
+        589,
+        1087
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        722,
+        1072,
+        739,
+        1087
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        275,
+        1088,
+        293,
+        1102
+      ],
+      "is_checked": true
+    },
+    {
+      "bbox": [
+        363,
+        1088,
+        380,
+        1102
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        450,
+        1088,
+        468,
+        1102
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        624,
+        1088,
+        641,
+        1102
+      ],
+      "is_checked": true
+    },
+    {
+      "bbox": [
+        722,
+        1088,
+        739,
+        1102
+      ],
+      "is_checked": true
+    },
+    {
+      "bbox": [
+        820,
+        1088,
+        837,
+        1102
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        275,
+        1103,
+        293,
+        1118
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        363,
+        1103,
+        380,
+        1118
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        483,
+        1103,
+        500,
+        1118
+      ],
+      "is_checked": true
+    },
+    {
+      "bbox": [
+        624,
+        1103,
+        641,
+        1118
+      ],
+      "is_checked": true
+    },
+    {
+      "bbox": [
+        722,
+        1103,
+        739,
+        1118
+      ],
+      "is_checked": true
+    },
+    {
+      "bbox": [
+        820,
+        1103,
+        837,
+        1118
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        275,
+        1119,
+        293,
+        1133
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        363,
+        1119,
+        380,
+        1133
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        450,
+        1119,
+        468,
+        1133
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        537,
+        1119,
+        555,
+        1133
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        624,
+        1119,
+        641,
+        1133
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        722,
+        1119,
+        739,
+        1133
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        820,
+        1119,
+        837,
+        1133
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        865,
+        1119,
+        883,
+        1133
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        912,
+        1119,
+        930,
+        1133
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        321,
+        1134,
+        338,
+        1149
+      ],
+      "is_checked": true
+    },
+    {
+      "bbox": [
+        388,
+        1134,
+        406,
+        1149
+      ],
+      "is_checked": true
+    },
+    {
+      "bbox": [
+        456,
+        1134,
+        474,
+        1149
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        520,
+        1134,
+        538,
+        1149
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        573,
+        1134,
+        590,
+        1149
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        634,
+        1134,
+        651,
+        1149
+      ],
+      "is_checked": true
+    },
+    {
+      "bbox": [
+        709,
+        1134,
+        726,
+        1149
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        792,
+        1273,
+        809,
+        1288
+      ],
+      "is_checked": false
+    },
+    {
+      "bbox": [
+        841,
+        1273,
+        858,
+        1288
+      ],
+      "is_checked": true
+    },
+    {
+      "bbox": [
+        792,
+        1335,
+        809,
+        1349
+      ],
+      "is_checked": true
+    },
+    {
+      "bbox": [
+        841,
+        1335,
+        858,
+        1349
+      ],
+      "is_checked": false
+    }
+  ]
+}

@@ -99,14 +99,14 @@ def test_keeps_non_overlapping_boxes():
     assert sorted(result) == sorted([box_a, box_b])
 
 
-from detect_cv import is_checked
+from detect_cv import is_checked, _adaptive_binary
 
 
 def test_unchecked_empty_box():
     gray = make_blank_gray()
     cv2.rectangle(gray, (50, 50), (70, 70), color=0, thickness=2)
 
-    assert is_checked(gray, (50, 50, 20, 20)) is False
+    assert is_checked(_adaptive_binary(gray), (50, 50, 20, 20)) is False
 
 
 def test_checked_box_with_contained_x_mark():
@@ -115,7 +115,7 @@ def test_checked_box_with_contained_x_mark():
     cv2.line(gray, (53, 53), (67, 67), color=0, thickness=2)
     cv2.line(gray, (53, 67), (67, 53), color=0, thickness=2)
 
-    assert is_checked(gray, (50, 50, 20, 20)) is True
+    assert is_checked(_adaptive_binary(gray), (50, 50, 20, 20)) is True
 
 
 def test_unchecked_when_external_line_passes_through():
@@ -125,7 +125,7 @@ def test_unchecked_when_external_line_passes_through():
     # crossing straight through its interior — must NOT be read as a check.
     cv2.line(gray, (0, 60), (299, 60), color=0, thickness=2)
 
-    assert is_checked(gray, (50, 50, 20, 20)) is False
+    assert is_checked(_adaptive_binary(gray), (50, 50, 20, 20)) is False
 
 
 def test_checked_when_border_fused_with_gridline_and_mark_is_separate():
@@ -142,7 +142,7 @@ def test_checked_when_border_fused_with_gridline_and_mark_is_separate():
     cv2.line(gray, (55, 55), (65, 65), color=0, thickness=2)  # X well inside, not touching border
     cv2.line(gray, (55, 65), (65, 55), color=0, thickness=2)
 
-    assert is_checked(gray, (50, 50, 20, 20)) is True
+    assert is_checked(_adaptive_binary(gray), (50, 50, 20, 20)) is True
 
 
 def test_checked_when_mark_touches_border_that_is_also_fused_with_gridline():
@@ -162,7 +162,36 @@ def test_checked_when_mark_touches_border_that_is_also_fused_with_gridline():
     cv2.line(gray, (50, 74), (74, 50), color=0, thickness=2)
     cv2.line(gray, (0, 74), (299, 74), color=0, thickness=2)  # gridline flush with the border
 
-    assert is_checked(gray, (49, 49, 27, 27)) is True
+    assert is_checked(_adaptive_binary(gray), (49, 49, 27, 27)) is True
+
+
+def test_checked_when_box_sits_on_shaded_background():
+    # Regression test for issues #2/#6 (docs/algorithm-known-issues.md): a
+    # checkbox drawn on a shaded/non-white cell background. The old global
+    # BINARY_THRESHOLD=200 read the whole shaded fill as "ink" (background
+    # gray 184 < 200 in the real case this reproduces), fusing the border
+    # into an oversized blob during candidate detection and inflating
+    # ink_ratio to ~1.0 during classification. Adaptive thresholding must
+    # both still find this box as a candidate and classify it correctly.
+    gray = make_blank_gray()
+    gray[40:85, 40:85] = 184  # shaded cell background, darker than white
+    cv2.rectangle(gray, (50, 50), (70, 70), color=0, thickness=2)
+    cv2.line(gray, (53, 53), (67, 67), color=0, thickness=2)
+    cv2.line(gray, (53, 67), (67, 53), color=0, thickness=2)
+
+    candidates = find_checkbox_candidates(gray)
+    assert any(abs(x - 50) <= 2 and abs(y - 50) <= 2 for (x, y, w, h) in candidates)
+    assert is_checked(_adaptive_binary(gray), (50, 50, 20, 20)) is True
+
+
+def test_unchecked_when_box_sits_on_shaded_background():
+    gray = make_blank_gray()
+    gray[40:85, 40:85] = 184  # shaded cell background, darker than white
+    cv2.rectangle(gray, (50, 50), (70, 70), color=0, thickness=2)
+
+    candidates = find_checkbox_candidates(gray)
+    assert any(abs(x - 50) <= 2 and abs(y - 50) <= 2 for (x, y, w, h) in candidates)
+    assert is_checked(_adaptive_binary(gray), (50, 50, 20, 20)) is False
 
 
 import pytest
