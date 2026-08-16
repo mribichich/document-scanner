@@ -9,6 +9,18 @@ ASPECT_RATIO_MAX = 1.3
 CORNER_EPSILON_FACTOR = 0.04
 MIN_EXTENT_RATIO = 0.6
 
+# Defensive limits for decode_image, guarding against a decompression-bomb
+# style upload on the public /detect endpoint: a small, highly-compressible
+# file (e.g. a huge flat-color PNG) can still decode to a bitmap large
+# enough to OOM-kill the Lambda. MAX_INPUT_BYTES is a cheap, tight cap on
+# the raw upload itself, comfortably under API Gateway's 10 MB payload
+# limit. MAX_IMAGE_PIXELS caps the implied full-resolution pixel count,
+# checked via a cheap 8x-downscaled decode before ever attempting a full
+# one (see decode_image).
+MAX_INPUT_BYTES = 8 * 1024 * 1024
+MAX_IMAGE_PIXELS = 50_000_000
+REDUCED_DECODE_SCALE = 8
+
 
 def find_checkbox_candidates(gray: np.ndarray) -> list[tuple[int, int, int, int]]:
     _, binary = cv2.threshold(gray, BINARY_THRESHOLD, 255, cv2.THRESH_BINARY_INV)
@@ -82,7 +94,12 @@ def deduplicate_boxes(
 INK_RATIO_THRESHOLD = 0.08
 INTERIOR_MARGIN = 3
 CONTAINMENT_PADDING_FACTOR = 2.0
-CONTAINMENT_EXTENT_RATIO = 1.75
+# Minimum fraction of a touching component's pixels that must fall inside
+# the box's own outer bounds (excluding the border ring itself, which is
+# ambiguous territory) for that component to still count as "the mark".
+# See _mark_is_contained for why this replaced a raw bounding-box-extent
+# check.
+CONTAINMENT_INTERIOR_RATIO = 0.2
 
 
 def _ink_ratio(
@@ -116,7 +133,7 @@ def _mark_is_contained(gray: np.ndarray, box: tuple[int, int, int, int]) -> bool
     region = gray[region_y1:region_y2, region_x1:region_x2]
     _, binary = cv2.threshold(region, BINARY_THRESHOLD, 255, cv2.THRESH_BINARY_INV)
 
-    _, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
+    _, labels, _, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
 
     # Sample components from the box's *interior* (inset by the same margin
     # used for ink-ratio measurement), not the full bounding box. The full
@@ -142,10 +159,45 @@ def _mark_is_contained(gray: np.ndarray, box: tuple[int, int, int, int]) -> bool
     if not box_labels:
         return False
 
+    # A component that reaches the interior isn't automatically "the mark":
+    # if a hand-drawn mark overshoots into the box's own border, and that
+    # border is *also* touching an adjacent table gridline, the mark +
+    # border + gridline become one connected component whose raw bounding
+    # box can be enormous (it now includes the far end of the gridline).
+    # Judging containment by that raw extent (the previous approach)
+    # rejects this case as "external", even though the mark itself is
+    # genuinely inside the box.
+    #
+    # Instead, judge each touching component by where its pixels actually
+    # are: pixels inside the box's own outer bounds vs. pixels genuinely
+    # outside them. The box's drawn border ring itself (outer bounds minus
+    # the interior inset) is excluded from both counts as ambiguous — it's
+    # shared territory between "the box" and whatever it happens to touch.
+    # A mark that's mostly inside the box keeps a high interior fraction
+    # even when a border-touching sliver drags in an external gridline; a
+    # true pass-through stroke (the original appraisal-2 bug this logic
+    # was built for) has most of its pixels genuinely outside the box, so
+    # its fraction stays low regardless of how much of it happens to
+    # overlap the interior sample area.
+    outer_x1, outer_y1 = x - region_x1, y - region_y1
+    outer_x2, outer_y2 = outer_x1 + w, outer_y1 + h
+
     for label in box_labels:
-        comp_w = stats[label, cv2.CC_STAT_WIDTH]
-        comp_h = stats[label, cv2.CC_STAT_HEIGHT]
-        if comp_w > w * CONTAINMENT_EXTENT_RATIO or comp_h > h * CONTAINMENT_EXTENT_RATIO:
+        comp_mask = labels == label
+        interior_count = int(np.count_nonzero(comp_mask[box_y1:box_y2, box_x1:box_x2]))
+
+        outer_mask = np.zeros_like(comp_mask)
+        oy1 = max(0, outer_y1)
+        oy2 = min(comp_mask.shape[0], outer_y2)
+        ox1 = max(0, outer_x1)
+        ox2 = min(comp_mask.shape[1], outer_x2)
+        outer_mask[oy1:oy2, ox1:ox2] = True
+        exterior_count = int(np.count_nonzero(comp_mask & ~outer_mask))
+
+        total = interior_count + exterior_count
+        if total == 0:
+            continue
+        if interior_count / total < CONTAINMENT_INTERIOR_RATIO:
             return False
 
     return True
@@ -158,7 +210,27 @@ def is_checked(gray: np.ndarray, box: tuple[int, int, int, int]) -> bool:
 
 
 def decode_image(image_bytes: bytes) -> np.ndarray:
+    if len(image_bytes) > MAX_INPUT_BYTES:
+        raise ValueError("image too large")
+
     arr = np.frombuffer(image_bytes, dtype=np.uint8)
+
+    # Peek dimensions cheaply before committing to a full-resolution decode.
+    # cv2.IMREAD_REDUCED_COLOR_8 decodes at 1/8 scale, which is far cheaper
+    # than a full decode, so this catches a decompression-bomb-style input
+    # (small on disk, huge once decoded) without ever allocating the full
+    # bitmap. A None/error result here is not itself an error — it just
+    # means the full decode below will fail the same way and report it.
+    try:
+        probe = cv2.imdecode(arr, cv2.IMREAD_REDUCED_COLOR_8)
+    except cv2.error:
+        probe = None
+    if probe is not None:
+        estimated_h = probe.shape[0] * REDUCED_DECODE_SCALE
+        estimated_w = probe.shape[1] * REDUCED_DECODE_SCALE
+        if estimated_h * estimated_w > MAX_IMAGE_PIXELS:
+            raise ValueError("image too large")
+
     try:
         image = cv2.imdecode(arr, cv2.IMREAD_COLOR)
     except cv2.error:
