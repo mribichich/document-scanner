@@ -6,8 +6,23 @@ locals {
 # Go is compiled to a single "bootstrap" binary for the provided.al2023 runtime.
 
 resource "null_resource" "build_detect_lambda" {
+  # Always re-run, not just when main.go's content hash changes. Unlike
+  # the CV Lambda's Docker image (pushed to ECR, a remote registry that
+  # persists independently of Terraform state), the Go build output only
+  # ever exists on whatever filesystem ran `go build` — on a fresh CI
+  # checkout there's no bootstrap binary on disk yet, so a content-hash
+  # trigger that happens to match already-applied state incorrectly skips
+  # rebuilding it. Confirmed live: CI's data.archive_file.detect_lambda
+  # failed with "could not archive missing file" because this local-exec
+  # never ran on that fresh runner. `go build` is fast, so re-running it
+  # every apply is cheap — but NOT byte-identical even when main.go is
+  # unchanged (the Go toolchain embeds build metadata like timestamps/
+  # paths by default), so expect aws_lambda_function.detect's
+  # source_code_hash to show a diff and redeploy on every apply. That's a
+  # minor inefficiency, not a correctness problem; revisit with
+  # `-trimpath`/reproducible-build flags if it's ever worth avoiding.
   triggers = {
-    source_hash = filesha256("${path.module}/../lambda/detect/main.go")
+    always_run = timestamp()
   }
 
   provisioner "local-exec" {
