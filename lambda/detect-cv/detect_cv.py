@@ -15,11 +15,68 @@ MIN_EXTENT_RATIO = 0.6
 # enough to OOM-kill the Lambda. MAX_INPUT_BYTES is a cheap, tight cap on
 # the raw upload itself, comfortably under API Gateway's 10 MB payload
 # limit. MAX_IMAGE_PIXELS caps the implied full-resolution pixel count,
-# checked via a cheap 8x-downscaled decode before ever attempting a full
-# one (see decode_image).
+# checked via a zero-decode header parse (see _probe_dimensions) before
+# ever calling into OpenCV.
+#
+# An earlier version of this guard used cv2.imdecode(..., IMREAD_REDUCED_COLOR_8)
+# as a "cheap" downscaled probe. That's cheap for JPEG (the decoder can
+# skip DCT coefficients), but NOT for PNG: OpenCV's PNG codec fully decodes
+# to full resolution internally and only downscales afterward, so the
+# "cheap" probe itself OOM'd on a large-enough PNG (confirmed live:
+# Runtime.OutOfMemory, 1022/1024 MB, on a PNG whose implied full resolution
+# was ~20000x20000). Parsing width/height directly from the file header
+# never decodes any pixel data, so it can't OOM regardless of format.
 MAX_INPUT_BYTES = 8 * 1024 * 1024
 MAX_IMAGE_PIXELS = 50_000_000
-REDUCED_DECODE_SCALE = 8
+
+
+def _probe_dimensions(image_bytes: bytes) -> tuple[int, int] | None:
+    """Read (width, height) straight from a PNG/JPEG header, no decode.
+
+    Returns None if the format isn't recognized or the header is
+    malformed/truncated — callers should fall back to the byte-size cap
+    as the only guard in that case, not attempt a decode-based probe.
+    """
+    # PNG: 8-byte signature, then an IHDR chunk (length, "IHDR", width,
+    # height, ...) — width/height are big-endian uint32 at a fixed offset.
+    if image_bytes[:8] == b"\x89PNG\r\n\x1a\n":
+        if len(image_bytes) < 24 or image_bytes[12:16] != b"IHDR":
+            return None
+        width = int.from_bytes(image_bytes[16:20], "big")
+        height = int.from_bytes(image_bytes[20:24], "big")
+        return width, height
+
+    # JPEG: scan markers for a Start-Of-Frame segment (SOF0-SOF15, except
+    # the DHT/JPG-extension marker numbers), which stores height then
+    # width as big-endian uint16, 5 bytes into the segment payload.
+    if image_bytes[:2] == b"\xff\xd8":
+        sof_markers = {
+            0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7,
+            0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF,
+        }
+        pos = 2
+        n = len(image_bytes)
+        while pos + 4 <= n:
+            if image_bytes[pos] != 0xFF:
+                pos += 1
+                continue
+            marker = image_bytes[pos + 1]
+            if marker in (0xD8, 0xD9):  # SOI/EOI, no payload
+                pos += 2
+                continue
+            if pos + 4 > n:
+                break
+            seg_len = int.from_bytes(image_bytes[pos + 2:pos + 4], "big")
+            if marker in sof_markers:
+                if pos + 9 > n:
+                    return None
+                height = int.from_bytes(image_bytes[pos + 5:pos + 7], "big")
+                width = int.from_bytes(image_bytes[pos + 7:pos + 9], "big")
+                return width, height
+            pos += 2 + seg_len
+        return None
+
+    return None
 
 
 def find_checkbox_candidates(gray: np.ndarray) -> list[tuple[int, int, int, int]]:
@@ -215,20 +272,14 @@ def decode_image(image_bytes: bytes) -> np.ndarray:
 
     arr = np.frombuffer(image_bytes, dtype=np.uint8)
 
-    # Peek dimensions cheaply before committing to a full-resolution decode.
-    # cv2.IMREAD_REDUCED_COLOR_8 decodes at 1/8 scale, which is far cheaper
-    # than a full decode, so this catches a decompression-bomb-style input
-    # (small on disk, huge once decoded) without ever allocating the full
-    # bitmap. A None/error result here is not itself an error — it just
-    # means the full decode below will fail the same way and report it.
-    try:
-        probe = cv2.imdecode(arr, cv2.IMREAD_REDUCED_COLOR_8)
-    except cv2.error:
-        probe = None
-    if probe is not None:
-        estimated_h = probe.shape[0] * REDUCED_DECODE_SCALE
-        estimated_w = probe.shape[1] * REDUCED_DECODE_SCALE
-        if estimated_h * estimated_w > MAX_IMAGE_PIXELS:
+    # Reject an implied-too-large image before ever decoding any pixel
+    # data. If the header can't be parsed (unrecognized/truncated format),
+    # fall through — the byte-size cap above is the only guard for that
+    # case, since there's no safe way to peek dimensions without a decode.
+    dimensions = _probe_dimensions(image_bytes)
+    if dimensions is not None:
+        width, height = dimensions
+        if width * height > MAX_IMAGE_PIXELS:
             raise ValueError("image too large")
 
     try:

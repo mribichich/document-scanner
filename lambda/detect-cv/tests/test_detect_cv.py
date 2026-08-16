@@ -208,6 +208,37 @@ def test_detect_checkboxes_raises_valueerror_on_empty_bytes():
 import detect_cv
 
 
+def test_probe_dimensions_reads_png_header():
+    png_header = (
+        b"\x89PNG\r\n\x1a\n"
+        + (13).to_bytes(4, "big")
+        + b"IHDR"
+        + (800).to_bytes(4, "big")
+        + (600).to_bytes(4, "big")
+    )
+    assert detect_cv._probe_dimensions(png_header) == (800, 600)
+
+
+def test_probe_dimensions_reads_jpeg_sof0_header():
+    # Minimal JPEG: SOI, then an SOF0 segment (marker 0xC0) with a 17-byte
+    # payload: length(2) + precision(1) + height(2) + width(2) + ... —
+    # _probe_dimensions only needs to reach the height/width fields.
+    height, width = 480, 640
+    sof0_payload = (
+        (17).to_bytes(2, "big")
+        + bytes([8])
+        + height.to_bytes(2, "big")
+        + width.to_bytes(2, "big")
+        + bytes(10)
+    )
+    jpeg_header = b"\xff\xd8" + b"\xff\xc0" + sof0_payload
+    assert detect_cv._probe_dimensions(jpeg_header) == (width, height)
+
+
+def test_probe_dimensions_returns_none_for_unrecognized_format():
+    assert detect_cv._probe_dimensions(b"not a recognized image header") is None
+
+
 def test_decode_image_rejects_oversized_raw_bytes():
     # A cheap, tight cap on the raw upload itself, applied before any
     # decode is attempted at all.
@@ -220,20 +251,36 @@ def test_decode_image_rejects_oversized_raw_bytes():
 def test_decode_image_rejects_oversized_implied_dimensions(monkeypatch):
     # A small-on-disk, highly-compressible file (e.g. a huge flat-color
     # PNG) can still decode to a bitmap large enough to OOM-kill the
-    # Lambda. decode_image guards against this by peeking dimensions via a
-    # cheap 8x-downscaled decode first. Exercise that guard without
-    # actually allocating a giant bitmap in the test: fake the reduced
-    # decode's result to imply a huge full-resolution image, and assert the
-    # full-resolution decode is never even attempted.
-    def fake_imdecode(arr, flag):
-        if flag == cv2.IMREAD_REDUCED_COLOR_8:
-            # Implies a 20000x8000px image once scaled back up by 8x —
-            # 160,000,000 pixels, well over MAX_IMAGE_PIXELS — without
-            # allocating anything close to that here.
-            return np.zeros((1000, 2500, 3), dtype=np.uint8)
-        raise AssertionError("full-resolution decode should never be attempted")
+    # Lambda. decode_image guards against this by parsing width/height
+    # directly from the PNG header — no pixel data is ever decoded, so
+    # this can't itself OOM (an earlier version used a cv2-based
+    # "downscaled" probe, which turned out not to be cheap for PNG: OpenCV
+    # fully decodes PNGs internally before downscaling, so that probe
+    # OOM'd live on a large-enough input instead of guarding against it).
+    def fail_if_decoded(arr, flag):
+        raise AssertionError("no decode should be attempted for an oversized image")
 
-    monkeypatch.setattr(detect_cv.cv2, "imdecode", fake_imdecode)
+    monkeypatch.setattr(detect_cv.cv2, "imdecode", fail_if_decoded)
+
+    # A minimal PNG header declaring 20000x20000px (400,000,000 pixels,
+    # well over MAX_IMAGE_PIXELS) — no real compressed pixel data needed,
+    # since the guard only ever reads the header.
+    png_header = (
+        b"\x89PNG\r\n\x1a\n"
+        + (13).to_bytes(4, "big")
+        + b"IHDR"
+        + (20000).to_bytes(4, "big")
+        + (20000).to_bytes(4, "big")
+    )
 
     with pytest.raises(ValueError):
-        detect_cv.decode_image(b"tiny-bytes-claiming-to-be-huge")
+        detect_cv.decode_image(png_header)
+
+
+def test_decode_image_falls_back_to_byte_cap_for_unrecognized_format():
+    # _probe_dimensions returns None for a format it can't parse (not a
+    # PNG/JPEG header) — decode_image must still work normally in that
+    # case (fall through to the byte-size cap + real decode), not treat an
+    # unparseable header as itself an error.
+    with pytest.raises(ValueError):
+        detect_cv.decode_image(b"not an image and not a recognized header")
