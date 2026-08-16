@@ -159,7 +159,15 @@ def is_checked(gray: np.ndarray, box: tuple[int, int, int, int]) -> bool:
 
 def decode_image(image_bytes: bytes) -> np.ndarray:
     arr = np.frombuffer(image_bytes, dtype=np.uint8)
-    image = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    try:
+        image = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    except cv2.error:
+        # Some malformed inputs (notably empty bytes) make cv2.imdecode
+        # raise a C++ assertion error instead of returning None. Normalize
+        # that to a ValueError like the None case below, without leaking
+        # OpenCV's internal exception detail (source file paths, assertion
+        # text) into the response the caller sees.
+        raise ValueError("could not decode image")
     if image is None:
         raise ValueError("could not decode image")
     return image

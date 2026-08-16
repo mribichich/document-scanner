@@ -136,3 +136,13 @@ def test_detect_checkboxes_end_to_end():
 def test_detect_checkboxes_raises_on_undecodable_bytes():
     with pytest.raises(ValueError):
         detect_checkboxes(b"not an image")
+
+
+def test_detect_checkboxes_raises_valueerror_on_empty_bytes():
+    # Empty bytes take a different OpenCV code path than garbage-but-nonempty
+    # bytes: cv2.imdecode raises a cv2.error (C++ assertion failure) here
+    # rather than returning None. decode_image must normalize that to a
+    # ValueError too, so the Lambda handler maps it to a clean HTTP 400
+    # instead of leaking OpenCV internals through a 500.
+    with pytest.raises(ValueError):
+        detect_checkboxes(b"")
