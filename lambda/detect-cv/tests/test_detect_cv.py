@@ -235,6 +235,25 @@ def test_probe_dimensions_reads_jpeg_sof0_header():
     assert detect_cv._probe_dimensions(jpeg_header) == (width, height)
 
 
+def test_probe_dimensions_skips_jpeg_fill_bytes_before_marker():
+    # JPEG spec (T.81 SS B.1.1.5) legally permits any number of 0xFF fill
+    # bytes immediately before a marker code, and real decoders are
+    # required to skip them. A single inserted fill byte here must not
+    # cause the SOF marker to be missed — that would silently disable the
+    # dimension guard for a real decoder while still parsing normally.
+    height, width = 480, 640
+    sof0_payload = (
+        (17).to_bytes(2, "big")
+        + bytes([8])
+        + height.to_bytes(2, "big")
+        + width.to_bytes(2, "big")
+        + bytes(10)
+    )
+    # Extra 0xFF padding between the marker prefix and the SOF0 code.
+    jpeg_header = b"\xff\xd8" + b"\xff\xff\xff\xc0" + sof0_payload
+    assert detect_cv._probe_dimensions(jpeg_header) == (width, height)
+
+
 def test_probe_dimensions_returns_none_for_unrecognized_format():
     assert detect_cv._probe_dimensions(b"not a recognized image header") is None
 

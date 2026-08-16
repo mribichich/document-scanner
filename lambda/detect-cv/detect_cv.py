@@ -56,24 +56,36 @@ def _probe_dimensions(image_bytes: bytes) -> tuple[int, int] | None:
         }
         pos = 2
         n = len(image_bytes)
-        while pos + 4 <= n:
+        while pos < n:
             if image_bytes[pos] != 0xFF:
                 pos += 1
                 continue
-            marker = image_bytes[pos + 1]
-            if marker in (0xD8, 0xD9):  # SOI/EOI, no payload
-                pos += 2
-                continue
-            if pos + 4 > n:
+            # A marker's 0xFF prefix may be followed by any number of
+            # extra 0xFF fill bytes before the actual marker code — legal
+            # per the JPEG spec (T.81 SS B.1.1.5), and real decoders skip
+            # them. Not skipping them here lets a single inserted fill
+            # byte silently disable this guard while the real decoder
+            # proceeds normally, reopening the vulnerability this
+            # function exists to close.
+            mpos = pos + 1
+            while mpos < n and image_bytes[mpos] == 0xFF:
+                mpos += 1
+            if mpos >= n:
                 break
-            seg_len = int.from_bytes(image_bytes[pos + 2:pos + 4], "big")
+            marker = image_bytes[mpos]
+            if marker in (0xD8, 0xD9):  # SOI/EOI, no payload
+                pos = mpos + 1
+                continue
+            if mpos + 3 > n:
+                break
+            seg_len = int.from_bytes(image_bytes[mpos + 1:mpos + 3], "big")
             if marker in sof_markers:
-                if pos + 9 > n:
+                if mpos + 8 > n:
                     return None
-                height = int.from_bytes(image_bytes[pos + 5:pos + 7], "big")
-                width = int.from_bytes(image_bytes[pos + 7:pos + 9], "big")
+                height = int.from_bytes(image_bytes[mpos + 4:mpos + 6], "big")
+                width = int.from_bytes(image_bytes[mpos + 6:mpos + 8], "big")
                 return width, height
-            pos += 2 + seg_len
+            pos = mpos + 1 + seg_len
         return None
 
     return None
