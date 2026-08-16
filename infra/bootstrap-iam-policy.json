@@ -97,8 +97,38 @@
     {
       "Sid": "EcrManageDetectCvRepo",
       "Effect": "Allow",
-      "Action": "ecr:*",
+      "Action": [
+        "ecr:CreateRepository",
+        "ecr:DeleteRepository",
+        "ecr:DescribeRepositories",
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:InitiateLayerUpload",
+        "ecr:UploadLayerPart",
+        "ecr:CompleteLayerUpload",
+        "ecr:PutImage",
+        "ecr:BatchGetImage",
+        "ecr:GetDownloadUrlForLayer",
+        "ecr:DescribeImages",
+        "ecr:ListImages",
+        "ecr:ListTagsForResource",
+        "ecr:TagResource",
+        "ecr:UntagResource"
+      ],
       "Resource": "arn:aws:ecr:*:*:repository/document-scanner-*"
+    },
+    {
+      "Sid": "GitHubActionsOidcProvider",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateOpenIDConnectProvider",
+        "iam:DeleteOpenIDConnectProvider",
+        "iam:GetOpenIDConnectProvider",
+        "iam:UpdateOpenIDConnectProviderThumbprint",
+        "iam:TagOpenIDConnectProvider",
+        "iam:UntagOpenIDConnectProvider",
+        "iam:ListOpenIDConnectProviderTags"
+      ],
+      "Resource": "arn:aws:iam::*:oidc-provider/token.actions.githubusercontent.com"
     }
   ]
 }

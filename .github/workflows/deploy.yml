@@ -1,0 +1,98 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.6"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13.15"
+
+      - name: Build Go Lambda (compile check)
+        working-directory: lambda/detect
+        run: go build -o /dev/null .
+
+      - name: Install CV pipeline test dependencies
+        working-directory: lambda/detect-cv
+        run: |
+          python3 -m venv venv
+          venv/bin/pip install -r requirements-dev.txt
+
+      - name: Run CV pipeline test suite
+        working-directory: lambda/detect-cv
+        run: venv/bin/pytest -v
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.15.8"
+
+      - name: Terraform fmt check
+        working-directory: infra
+        run: terraform fmt -check -recursive
+
+  deploy:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # required for AWS OIDC federation
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.15.8"
+
+      # No AWS access keys stored anywhere: this assumes an IAM role
+      # directly via GitHub's OIDC token, trust-scoped to this exact repo
+      # and the main branch only (see infra/github_oidc.tf).
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::268719686093:role/document-scanner-dev-github-actions-deploy
+          aws-region: us-east-1
+
+      - name: Terraform init
+        working-directory: infra
+        run: terraform init -input=false
+
+      - name: Terraform validate
+        working-directory: infra
+        run: terraform validate
+
+      - name: Terraform apply
+        working-directory: infra
+        run: terraform apply -input=false -auto-approve -no-color
+
+      - name: Smoke test the deployed CV endpoint
+        working-directory: infra
+        run: |
+          ENDPOINT=$(terraform output -raw detect_endpoint)
+          STATUS=$(curl -s -o /tmp/response.json -w "%{http_code}" -X POST "$ENDPOINT" \
+            -F "file=@../samples/appraisal-1.png")
+          echo "HTTP status: $STATUS"
+          cat /tmp/response.json
+          if [ "$STATUS" != "200" ]; then
+            echo "Smoke test failed: expected HTTP 200"
+            exit 1
+          fi

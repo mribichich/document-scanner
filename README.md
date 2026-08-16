@@ -320,6 +320,40 @@ of the two deployed routes.
 > you hit an equivalent error with a different Docker setup/version, that
 > flag pair is the fix to look for.
 
+## CI/CD
+
+`.github/workflows/deploy.yml` runs on every push and pull request against
+`main`:
+
+- **`test` job** (always runs): compiles the Go Lambda, runs the full
+  `lambda/detect-cv` pytest suite, and checks Terraform formatting.
+- **`deploy` job** (push to `main` only, after `test` passes): runs
+  `terraform apply` for real, then smoke-tests the deployed `/detect`
+  endpoint against `samples/appraisal-1.png` and fails the job if it
+  doesn't return `HTTP 200`.
+
+**Authentication:** no AWS access keys are stored in GitHub. The `deploy`
+job assumes an IAM role (`document-scanner-dev-github-actions-deploy`,
+defined in `infra/github_oidc.tf`) directly via GitHub's OIDC token
+federation. That role's trust policy is scoped to this exact repo and the
+`main` branch only (`repo:mribichich/document-scanner:ref:refs/heads/main`)
+— a workflow run from a fork or any other branch cannot assume it, and
+there's no long-lived secret that could leak. The role has the same deploy
+permissions as the human bootstrap user (`infra/bootstrap-iam-policy.json`,
+attached to both), so CI can run the exact `terraform apply` a human
+deployer would.
+
+**One-time setup, already done for this repo** (documented here in case
+this is ever forked/re-bootstrapped): the OIDC provider and role are
+Terraform-managed (`infra/github_oidc.tf`), applied the same way as
+everything else in `infra/` — no separate manual AWS Console step beyond
+what "AWS account setup" above already covers. If you fork this repo and
+want your own fork to deploy, update the `github_repo` variable's default
+in `infra/github_oidc.tf` (or set it via `-var`) to your fork's
+`owner/repo` before applying, and update the hardcoded `role-to-assume`
+ARN in `.github/workflows/deploy.yml` to match your own AWS account ID
+once the role exists (`terraform output github_actions_deploy_role_arn`).
+
 ## Testing
 
 ### Local CV development loop (no AWS required)
