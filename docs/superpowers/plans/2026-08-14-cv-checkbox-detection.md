@@ -1269,6 +1269,72 @@ README (verified command-by-command against real repo/AWS state).
 
 ---
 
+### Task 12: Review against docs/chatgpt.md
+
+**Files:** none — read-only review task.
+
+**Interfaces:** none.
+
+Added after Task 11, at the user's request, since `docs/chatgpt.md` (the
+prior exploratory session that served as methodology guidance for this
+whole plan) may contain suggested checks/techniques we didn't end up
+covering.
+
+- [ ] **Step 1: Dispatch a fresh agent (no prior context) to cross-check the implementation**
+
+Give it `docs/chatgpt.md` in full and the actual implementation
+(`lambda/detect-cv/detect_cv.py`, `tests/test_detect_cv.py`). Ask it to
+walk every suggested step/technique in that doc (grayscale, threshold —
+including the adaptive-threshold fallback for "real-world scans" the doc
+mentions as an alternative to global thresholding, which this
+implementation does NOT use — findContours/RETR_TREE, boundingRect,
+aspect-ratio + size filtering, `approxPolyDP` 4-corner check, nested-
+contour deduplication via IoU, interior-crop ink-density classification,
+the doc's suggested Canny+HoughLinesP diagonal-stroke robustness
+improvement, reading-order sort, visual validation) and check off which
+are implemented, which are deliberately not (and whether that deviation
+is justified — e.g. the connected-component containment check this
+implementation uses instead of Hough-line diagonal detection was a
+deliberate, reviewed design choice, not an oversight), and which are
+missing without a documented reason.
+
+- [ ] **Step 2: Triage findings**
+
+Any real, undocumented gap gets added to the README's "Next steps" /
+known-limitations section (or fixed, if small and clearly correct) —
+controller's judgment call, same as every other review finding in this
+plan.
+
+---
+
+### Task 13: Final whole-plan review
+
+**Files:** none — read-only review task.
+
+**Interfaces:** none.
+
+The final whole-branch review this workflow's process calls for (see
+`superpowers:subagent-driven-development`'s "Final Review" section) —
+not yet performed at the time Task 11 completed. Added explicitly at the
+user's request.
+
+- [ ] **Step 1: Dispatch on the most capable available model**
+
+Use `superpowers:requesting-code-review`'s `code-reviewer.md` template.
+Base = the commit before this plan's work started (`125c5f1`, "Initial
+document-scanner app"). Head = current `HEAD`. Give it the full plan
+(this file) and the design spec
+(`docs/superpowers/specs/2026-08-14-cv-checkbox-detection-design.md`) as
+the requirements it's reviewing against.
+
+- [ ] **Step 2: Handle findings per the skill's final-review process**
+
+One fix dispatch for all findings together (not one per finding), one
+scoped re-review, adjudicate any residuals — per
+`subagent-driven-development`'s "Final Review" section.
+
+---
+
 ## After this plan
 
 All changes are left uncommitted per the Global Constraints above — review
