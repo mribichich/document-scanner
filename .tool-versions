@@ -1,3 +1,4 @@
 golang 1.26.6
 terraform 1.15.8
 awscli 2.36.22
+python 3.13.15
