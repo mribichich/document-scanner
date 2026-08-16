@@ -20,7 +20,7 @@ resource "null_resource" "build_and_push_detect_cv_image" {
     working_dir = "${path.module}/../lambda/detect-cv"
     command     = <<-EOT
       aws ecr get-login-password --region ${var.aws_region} | docker login --username AWS --password-stdin ${aws_ecr_repository.detect_cv.repository_url}
-      docker build --platform linux/arm64 -t ${aws_ecr_repository.detect_cv.repository_url}:latest .
+      docker build --platform linux/arm64 --provenance=false --sbom=false -t ${aws_ecr_repository.detect_cv.repository_url}:latest .
       docker push ${aws_ecr_repository.detect_cv.repository_url}:latest
     EOT
   }
