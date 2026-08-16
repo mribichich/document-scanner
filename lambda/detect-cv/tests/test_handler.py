@@ -94,3 +94,29 @@ def test_handler_returns_400_for_missing_content_type():
     response = handler(event, None)
 
     assert response["statusCode"] == 400
+
+
+def test_handler_returns_generic_500_body_for_unexpected_exception(monkeypatch):
+    # A generic (non-ValueError) exception from detect_checkboxes must not
+    # leak its own text into the response body — only a fixed, generic
+    # message. The detail belongs in CloudWatch Logs (via logging.exception
+    # in the handler), not in what the caller sees.
+    import handler as handler_module
+
+    def _boom(image_bytes):
+        raise RuntimeError("some sensitive internal detail")
+
+    monkeypatch.setattr(handler_module, "detect_checkboxes", _boom)
+
+    event = {
+        "headers": {"content-type": "image/png"},
+        "body": base64.b64encode(_tiny_png_bytes()).decode("ascii"),
+        "isBase64Encoded": True,
+    }
+
+    response = handler_module.handler(event, None)
+
+    assert response["statusCode"] == 500
+    body = json.loads(response["body"])
+    assert body == {"error": "internal error"}
+    assert "some sensitive internal detail" not in response["body"]

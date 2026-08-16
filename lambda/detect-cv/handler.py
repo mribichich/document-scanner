@@ -1,5 +1,6 @@
 import base64
 import json
+import logging
 from email import policy
 from email.parser import BytesParser
 
@@ -52,7 +53,12 @@ def handler(event, context):
         boxes = detect_checkboxes(image_bytes)
     except ValueError as e:
         return _json_response(400, {"error": f"invalid image: {e}"})
-    except Exception as e:
-        return _json_response(500, {"error": str(e)})
+    except Exception:
+        # Never leak internal exception detail (stack internals, library
+        # error text) into the response body. The full exception still
+        # reaches CloudWatch Logs via logging.exception, which Lambda
+        # ships there automatically — just not to the caller.
+        logging.exception("checkbox detection failed")
+        return _json_response(500, {"error": "internal error"})
 
     return _json_response(200, {"boxes": boxes})
