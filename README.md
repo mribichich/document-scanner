@@ -299,6 +299,28 @@ terraform plan
 terraform apply
 ```
 
+**State is remote, shared, and versioned** — an S3 bucket
+(`infra/terraform_state.tf`, versioning + encryption + public access
+blocked), using Terraform's native S3 locking (`use_lockfile`, no DynamoDB
+table needed). This is required, not just nice-to-have: GitHub Actions CI
+(see "CI/CD" below) runs on ephemeral runners with zero local state on
+every run — without shared state, CI would try to re-create every resource
+that already exists and fail with `EntityAlreadyExists`/
+`ResourceAlreadyExistsException` (confirmed live, the first CI deploy
+attempt failed exactly this way before the backend was added). Both the
+human deployer and CI read/write the same state via the `backend "s3"`
+block in `infra/versions.tf` — there's nothing to configure locally beyond
+the normal `terraform init`.
+
+**If you're bootstrapping this on a brand-new AWS account** (e.g. a fork,
+per the CI/CD section's fork instructions below), this bucket won't exist
+yet — chicken-and-egg, since the backend config needs the bucket, but the
+bucket is itself Terraform-managed. Sequence: temporarily comment out the
+`backend "s3"` block in `infra/versions.tf`, run `terraform apply` with
+local state (creates the bucket and everything else), then uncomment the
+backend block, update the bucket name in it to match your account ID, and
+run `terraform init -migrate-state` to move local state into it.
+
 Terraform will cross-compile the Go Lambda (`GOOS=linux GOARCH=arm64`) and
 also build + push the CV Lambda's container image (`docker build
 --platform linux/arm64 ...` against `lambda/detect-cv/Dockerfile`, then

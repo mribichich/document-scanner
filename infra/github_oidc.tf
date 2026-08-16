@@ -54,6 +54,17 @@ resource "aws_iam_openid_connect_provider" "github_actions" {
 resource "aws_iam_role" "github_actions_deploy" {
   name = "${local.name_prefix}-github-actions-deploy"
 
+  # NOTE: the deploy identity (human or this role) deliberately does NOT
+  # hold a standing iam:UpdateAssumeRolePolicy grant on document-scanner-*
+  # roles (see infra/bootstrap-iam-policy.json) — that would let it
+  # rewrite its own trust condition below, a self-modifying-trust /
+  # privilege-escalation risk flagged by an automated security review.
+  # Practical consequence: changing github_repo/github_owner_id/
+  # github_repo_id and re-applying will fail with AccessDenied on
+  # UpdateAssumeRolePolicy for an ALREADY-EXISTING role (fine on first
+  # creation, since that doesn't need the Update API). If you ever need
+  # to change this role's trust condition, temporarily grant that action
+  # as root, apply, then revoke it again — don't make it a standing grant.
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
