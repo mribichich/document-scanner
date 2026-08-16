@@ -1,5 +1,6 @@
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import cv2
@@ -7,13 +8,19 @@ import cv2
 from detect_cv import detect_checkboxes
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
+ALGO = "cv"
+
+
+def make_run_timestamp() -> str:
+    """Filesystem-safe, sortable timestamp shared by every image in one run."""
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
 def output_paths(image_path: Path, results_dir: Path) -> tuple[Path, Path]:
     name = image_path.stem
     return (
-        results_dir / f"{name}-cv.json",
-        results_dir / f"{name}-cv-annotated.png",
+        results_dir / f"{name}.json",
+        results_dir / f"{name}-annotated.png",
     )
 
 
@@ -51,18 +58,20 @@ def main() -> None:
 
     if target.is_dir():
         images = sorted(p for p in target.iterdir() if p.suffix.lower() in IMAGE_EXTENSIONS)
-        results_dir = target / "results"
+        results_root = target / "results"
     else:
         images = [target]
-        results_dir = target.parent / "results"
+        results_root = target.parent / "results"
 
     if not images:
         print(f"No images found in {target}", file=sys.stderr)
         sys.exit(1)
 
+    results_dir = results_root / ALGO / make_run_timestamp()
     results_dir.mkdir(parents=True, exist_ok=True)
     for image_path in images:
         process_image(image_path, results_dir)
+    print(f"\nResults written to {results_dir}")
 
 
 if __name__ == "__main__":

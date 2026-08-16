@@ -17,5 +17,10 @@ lambda/**/__pycache__/
 lambda/**/*.pyc
 .pytest_cache/
 
+# Detection results (per-run, per-algo, timestamped local artifacts - not committed)
+# Matches samples/results/ (current scheme: samples/results/<algo>/<timestamp>/) as
+# well as legacy samples/results_0/, samples/results_1/ dirs from before this scheme.
+samples/results*/
+
 # OS
 .DS_Store

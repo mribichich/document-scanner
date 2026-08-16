@@ -87,9 +87,12 @@ using the source image's actual pixel dimensions.
   rather than zip-deployed like the Go one), `tests/` (pytest suite).
 - `samples/` — 4 real appraisal-document images (extracted from
   `challenge.pdf`'s embedded sample images) for testing detection quality.
-  `samples/results/` holds saved raw JSON responses and annotated
-  (bbox-overlaid) PNGs from the last verified test run of each
-  implementation — see "Testing" below.
+  `samples/results/<algo>/<timestamp>/` is where local runs write raw JSON
+  responses and annotated (bbox-overlaid) PNGs — `<algo>` is `cv` or
+  `textract`, `<timestamp>` identifies the run, so different runs (and both
+  algorithms) never collide and can be compared side by side. This tree is
+  gitignored — it's a local, per-run scratch area, not committed — see
+  "Testing" below.
 - `scripts/annotate_detections.py` — draws detected boxes over the sample
   images (green = checked, red = unchecked) so Textract results can be
   reviewed visually. (The CV pipeline's `cli.py` draws its own annotated
@@ -408,19 +411,24 @@ python3 -m venv venv && venv/bin/pip install -r requirements-dev.txt   # one-tim
 venv/bin/python3 cli.py <image_or_folder>
 ```
 
-For each image, it writes into a `results/` subfolder alongside the
-input:
+For each image, it writes into a timestamped `results/cv/<timestamp>/`
+subfolder alongside the input, so every run is kept separate from the last:
 
-- `<name>-cv.json` — the raw `{"boxes": [...]}` response
-- `<name>-cv-annotated.png` — the boxes drawn directly on the image
+- `<name>.json` — the raw `{"boxes": [...]}` response
+- `<name>-annotated.png` — the boxes drawn directly on the image
   (green outline = `is_checked: true`, red = `false`), so you can eyeball
   correctness immediately without a separate visualization step
 
 E.g. `venv/bin/python3 cli.py ../../samples` processes all 4 sample images
-and writes `samples/results/appraisal-{1..4}-cv.{json,png}`. This is the
-loop used to calibrate the constants at the top of `detect_cv.py`
-(`MIN_BOX_SIZE`, `MAX_BOX_SIZE`, `MIN_EXTENT_RATIO`, etc.) — run it,
-eyeball the annotated PNGs, adjust a constant, repeat.
+and writes `samples/results/cv/<timestamp>/appraisal-{1..4}.{json,png}`
+(`<timestamp>` is a UTC value like `20260816T143022Z`, generated fresh each
+run). This is the loop used to calibrate the constants at the top of
+`detect_cv.py` (`MIN_BOX_SIZE`, `MAX_BOX_SIZE`, `MIN_EXTENT_RATIO`, etc.) —
+run it, eyeball the annotated PNGs, adjust a constant, repeat. Because each
+run gets its own timestamped folder, you can diff or eyeball successive
+runs against each other instead of one overwriting the last. This whole
+tree (`samples/results/`) is gitignored — it's local scratch output, not
+committed.
 
 The pytest suite (`tests/`) covers the same code with unit/integration
 tests; run it with `venv/bin/python3 -m pytest` from `lambda/detect-cv/`.
@@ -467,8 +475,11 @@ detect_endpoint` and `terraform -chdir=infra output detect_textract_endpoint`.
 `scripts/call_detect_api.sh` sends every `.png`/`.jpg`/`.jpeg` in a folder
 to whichever endpoint you give it, prints a one-line summary per file
 (HTTP status, boxes detected, checked/unchecked counts), and saves each
-raw JSON response into a `results/` subfolder it creates alongside the
-images:
+raw JSON response into a timestamped `results/<algo>/<timestamp>/`
+subfolder it creates alongside the images. It infers `<algo>` (`cv` or
+`textract`) from the endpoint URL's route path (`/detect` vs.
+`/detect-textract`), so results from both implementations — and from
+different runs — never collide:
 
 ```bash
 ./scripts/call_detect_api.sh <folder> [endpoint_url]
@@ -485,13 +496,11 @@ target the Textract pipeline instead, pass it explicitly:
 
 Works against any folder, not just `samples/`.
 
-> **Gotcha:** the script always writes to `results/<name>.json` regardless
-> of which endpoint you point it at — it doesn't know which implementation
-> produced the response, unlike `cli.py`'s `-cv` suffix. Running it twice
-> against the same folder with different endpoints overwrites the first
-> run's output with the second. If you want to keep both sets of results,
-> copy the `results/` folder aside between runs (or diff it) before
-> switching endpoints.
+Each run's output lives at `results/<algo>/<timestamp>/<name>.json`, so
+running the script twice against the same folder — whether against the
+same endpoint again or the other one — never overwrites a previous run's
+files; every run gets its own timestamp and every algorithm gets its own
+subfolder.
 
 ### Test against the sample appraisal documents
 
@@ -505,8 +514,9 @@ both filled and empty):
 ./scripts/call_detect_api.sh samples "$(terraform -chdir=infra output -raw detect_textract_endpoint)"  # Textract, /detect-textract
 ```
 
-(Remember the overwrite gotcha above if you run both back-to-back and want
-to keep both sets of raw JSON.) Or by hand, one file at a time:
+(Both commands are safe to run back-to-back — each writes into its own
+`samples/results/<algo>/<timestamp>/` folder, so nothing gets overwritten.)
+Or by hand, one file at a time:
 
 ```bash
 ENDPOINT=$(terraform -chdir=infra output -raw detect_endpoint)
@@ -579,29 +589,38 @@ Expected response shape (same for both endpoints):
 }
 ```
 
-Raw responses from the last verified run of each implementation are saved
-at `samples/results/appraisal-*.json` (Textract) and
-`samples/results/appraisal-*-cv.json` (CV) — not just left in `/tmp` — so
-they can be diffed against or inspected later without re-running anything.
+Raw responses aren't left in `/tmp` — running `scripts/call_detect_api.sh`
+(or `cli.py` for the CV pipeline) against `samples/` saves each run's
+output under `samples/results/<algo>/<timestamp>/appraisal-*.json`, so it
+can be diffed against or inspected later without re-running anything. This
+tree is gitignored (results are regenerated locally, not committed), so
+"the last verified run" is whatever you last ran locally — re-run the
+commands above to reproduce the numbers in the tables.
 
 ### Visualizing detections
 
 The JSON alone is hard to sanity-check.
 
 For the **CV pipeline**, `cli.py` (see "Local CV development loop" above)
-already writes `samples/results/appraisal-{1..4}-cv-annotated.png` as part
-of every run — no separate step needed.
+already writes `samples/results/cv/<timestamp>/appraisal-{1..4}-annotated.png`
+as part of every run — no separate step needed.
 
 For the **Textract pipeline**, `scripts/annotate_detections.py` draws
 every detected box over its source image (green outline =
-`is_checked: true`, red = `false`) the same way:
+`is_checked: true`, red = `false`) the same way. It takes the results
+folder to read JSON from (and write annotated PNGs into) as its second
+argument — point it at the specific timestamped run you want to visualize,
+e.g. the one `call_detect_api.sh` against the Textract endpoint just
+created:
 
 ```bash
 python3 -m venv /tmp/annotate-venv && /tmp/annotate-venv/bin/pip install --quiet Pillow
-/tmp/annotate-venv/bin/python3 scripts/annotate_detections.py samples samples/results
+RUN_DIR=samples/results/textract/<timestamp>  # from the call_detect_api.sh output above
+/tmp/annotate-venv/bin/python3 scripts/annotate_detections.py samples "$RUN_DIR"
 ```
 
-Outputs `samples/results/appraisal-{1..4}-annotated.png`.
+Outputs `$RUN_DIR/appraisal-{1..4}-annotated.png` alongside the JSON responses
+already in that folder.
 
 On the last verified visual review of the CV pipeline (same bar as the
 original Textract review — eyeball every box against the source image):
