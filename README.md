@@ -57,7 +57,13 @@ rectangularity) to find checkbox-shaped candidates -> IoU-based
 deduplication of nested contours -> per-box classification via ink-ratio +
 a containment check (a mark is "checked" only if it's sized to fit inside
 the box, not a fragment of a longer stroke passing through it). All
-tunable constants live at the top of that file.
+tunable constants live at the top of that file. `handler.py`'s error
+responses never leak internal detail to the caller: a bad request body
+maps to a generic `400`, and any other unexpected exception maps to a
+generic `500` with a fixed `{"error": "internal error"}` body — the full
+exception is logged via `logging.exception` first, which Lambda
+automatically ships to CloudWatch Logs, so the detail is still there for
+debugging without ever reaching the response.
 
 **Textract pipeline** (`lambda/detect/main.go`): parses the uploaded image
 (raw body or `multipart/form-data`), calls Textract's `AnalyzeDocument`
@@ -525,16 +531,15 @@ Outputs `samples/results/appraisal-{1..4}-annotated.png`.
 
 On the last verified visual review of the CV pipeline (same bar as the
 original Textract review — eyeball every box against the source image):
-both of the concrete failure cases that motivated building the CV pipeline
-are fixed. On `appraisal-2.png`, the stray diagonal scratch line that
-crosses through the "No Zoning" checkbox no longer produces a false
-`is_checked: true` — the containment check correctly recognizes the mark
-as a fragment of a longer stroke, not a checkbox selection, and classifies
-the box red/unchecked. On `appraisal-4.png`, the "Utilities" checkbox grid
-(Electricity/Gas/Water/Sanitary Sewer) that Textract dropped entirely
-under a diagonal watermark is now fully detected, with each box correctly
-classified. Overall box placement is tight and classification matches the
-visible marks on both reviewed pages.
+one of the two concrete failure cases that motivated building the CV
+pipeline is fixed, and the other has changed shape rather than
+disappeared — see "appraisal-2.png scratch line: missed detection, not a
+correct classification" under "Next steps" for the detail. On
+`appraisal-4.png`, the "Utilities" checkbox grid (Electricity/Gas/Water/Sanitary
+Sewer) that Textract dropped entirely under a diagonal watermark is now
+fully detected, with each box correctly classified. Overall box placement
+is tight and classification matches the visible marks on both reviewed
+pages.
 
 One known gap: on `appraisal-1.png`, calibration converged on 118
 detected boxes against an estimate of ~125 expected (per a similar prior
@@ -578,11 +583,32 @@ in it — `force_delete = true` on `aws_ecr_repository.detect_cv` so
 Both detection implementations are wired in, deployed behind the same API
 Gateway, and validated against all 4 sample images, including a visual
 accuracy review of each (see "Visualizing detections" above). The CV
-pipeline fixes both concrete Textract failure cases that motivated
-building it (the appraisal-2 scratch-line false positive, the appraisal-4
-watermarked Utilities-grid false negatives). Remaining ideas, roughly in
-priority order:
+pipeline fixes one of the two concrete Textract failure cases that
+motivated building it (the appraisal-4 watermarked Utilities-grid false
+negatives); the appraisal-2 scratch-line case is not fixed so much as
+changed into a different defect — see the first item below. Remaining
+ideas, roughly in priority order:
 
+- **appraisal-2.png scratch line: missed detection, not a correct
+  classification.** The original Textract failure was a false positive:
+  the stray diagonal scratch line crossing the "No Zoning" checkbox (around
+  x=718, y=503 in the 1586x846 image) made Textract read it as
+  `is_checked: true`. The CV pipeline does *not* fix this by correctly
+  recognizing the mark as unrelated to the box and classifying it
+  red/unchecked — verified directly, that box does not appear in
+  `detect_checkboxes`'s output at all. What actually happens: during
+  candidate detection, the scratch line's ink is 8-connected to the
+  checkbox's own drawn border, so `cv2.findContours` returns one fused
+  contour for "border + scratch line" whose bounding box is roughly
+  859x31px (versus this document's ~24x24px checkboxes) — far outside
+  `MAX_BOX_SIZE`, so it's discarded before ever reaching classification.
+  The box simply isn't detected; this is a missed checkbox (false
+  negative), a different defect than the false positive it replaced, not
+  an absence of one. Fixing it would need candidate detection to be more
+  robust to a mark fusing with a box's border (e.g. morphological opening
+  to break thin connecting strokes before contour extraction) — not yet
+  built, tracked here as a known, verified gap rather than a silently
+  assumed fix.
 - **Document-size / DPI generalization:** the CV pipeline's tunable
   constants (`MIN_BOX_SIZE`, `MAX_BOX_SIZE`, `MIN_EXTENT_RATIO`, etc., all
   at the top of `lambda/detect-cv/detect_cv.py`) are calibrated in pixels
@@ -604,41 +630,45 @@ priority order:
 - **Containment check sufficiency:** the design's reserved fallback
   (Canny + `HoughLinesP` diagonal-stroke detection as an additional
   classification signal) was deliberately not built, since the simpler
-  containment check already resolved both known failure cases on the 4
-  samples. Revisit if a document with a harder version of the
-  "unrelated mark near a checkbox" problem is encountered. **Specific,
-  currently-untested gap** (found via an audit against
-  `docs/chatgpt.md`): `is_checked()` requires ink coverage above a
-  threshold and that the ink's connected component isn't much larger
-  than the box (`CONTAINMENT_EXTENT_RATIO`), but has no shape/structure
-  requirement — an isolated dust speck, hole-punch shadow, or print
-  artifact that's fully contained inside a checkbox and covers enough of
-  the interior would currently be classified `checked`, which
-  Hough-line diagonal detection would have correctly rejected (no line
-  structure) but the containment check does not. No test exercises this
-  case in either direction (`tests/test_detect_cv.py` only covers an
-  X-mark and a border-to-border passing line). Add a targeted test case
-  before trusting this pipeline on documents beyond the 4 current
-  samples.
+  containment check already resolved the appraisal-4 false-negative case
+  on the 4 samples, and (after a later fix) correctly handles a checkbox
+  border touching an adjacent table gridline — both when the mark inside
+  stays clear of the border and when a hand-drawn mark overshoots into a
+  border that's also touching a gridline (see `tests/test_detect_cv.py`:
+  `test_checked_when_border_fused_with_gridline_and_mark_is_separate` and
+  `test_checked_when_mark_touches_border_that_is_also_fused_with_gridline`).
+  The appraisal-2 scratch-line case turned out not to be a containment-check
+  problem at all — see "appraisal-2.png scratch line" above; that mark
+  never reaches classification in the first place. Revisit the Hough-line
+  fallback if a document with a harder version of the "unrelated mark near
+  a checkbox" problem is encountered. **Specific, currently-untested
+  gap** (found via an audit against `docs/chatgpt.md`): `is_checked()`
+  requires ink coverage above a threshold and that enough of the touching
+  ink's connected component falls within the box's own bounds
+  (`CONTAINMENT_INTERIOR_RATIO`), but has no shape/structure requirement —
+  an isolated dust speck, hole-punch shadow, or print artifact that's
+  fully contained inside a checkbox and covers enough of the interior
+  would currently be classified `checked`, which Hough-line diagonal
+  detection would have correctly rejected (no line structure) but the
+  containment check does not. No test exercises this case in either
+  direction. Add a targeted test case before trusting this pipeline on
+  documents beyond the 4 current samples.
 - **Retiring `/detect-textract`:** deliberately deferred — see
   `docs/superpowers/specs/2026-08-14-cv-checkbox-detection-design.md`
   ("Open questions"). Keep both endpoints live until there's enough
   side-by-side comparison data (beyond the 4 samples) to justify dropping
   one.
-- **Generic-error-message follow-up:** `lambda/detect-cv/handler.py`
-  already fixes the specific case of `cv2.error` (malformed images) so it
-  maps to a clean `400` instead of leaking OpenCV's internal C++ assertion
-  text — but its generic `except Exception` fallback still returns
-  `str(e)` in the `500` response body for any *other* unexpected exception
-  type, which is a narrower instance of the same "don't leak internal
-  detail" concern. Worth making that fallback message fully generic too
-  (detail already goes to CloudWatch Logs regardless).
 - **Size limit (Textract path only):** Textract's synchronous
   `AnalyzeDocument` caps document bytes at 5 MB; large/high-DPI scans over
   that need the async, S3-backed Textract flow (`StartDocumentAnalysis` +
-  `GetDocumentAnalysis`) instead. Doesn't apply to the CV pipeline, which
-  has no such contract-level limit (just Lambda's own payload/memory/time
-  budget).
+  `GetDocumentAnalysis`) instead. The CV pipeline has no such API-level
+  contract limit, but `decode_image` in `lambda/detect-cv/detect_cv.py`
+  does reject raw uploads over `MAX_INPUT_BYTES` (8 MB) and, separately,
+  any image whose implied full-resolution pixel count exceeds
+  `MAX_IMAGE_PIXELS` (50 megapixels) — checked cheaply via an 8x-downscaled
+  probe decode before ever attempting a full-resolution one — to guard
+  against a small, highly-compressible upload decoding into a bitmap large
+  enough to OOM-kill the Lambda.
 - **IAM Identity Center migration:** see the TODO under "AWS account
   setup" (and its related ECR-permissions follow-up right below it) —
   replace the bootstrap IAM user with a real permission-set-based setup
