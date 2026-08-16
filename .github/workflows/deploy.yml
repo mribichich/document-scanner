@@ -58,6 +58,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # infra/detect_cv.tf builds the CV Lambda's image with `docker build
+      # --platform linux/arm64` (matching the Lambda's arm64 architecture),
+      # but GitHub-hosted runners are amd64 — without QEMU registered,
+      # `RUN` steps inside that build fail with "exec format error" (the
+      # runner can start the build but can't execute arm64 binaries during
+      # it). Must run before Terraform apply, since that's what invokes
+      # the docker build via a local-exec provisioner.
+      - name: Set up QEMU (for cross-arch Docker build)
+        uses: docker/setup-qemu-action@v3
+
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
         with:
