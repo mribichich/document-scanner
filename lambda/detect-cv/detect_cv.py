@@ -443,6 +443,20 @@ def _local_shape_verdict(
         max_size = MAX_BOX_SIZE * HINT_SIZE_TOLERANCE_FACTOR
         if not (min_size <= w <= max_size and min_size <= h <= max_size):
             continue
+        # Mirrors find_checkbox_candidates' own aspect-ratio filter - without
+        # this, a genuine but non-square rectangular structure nearby (a
+        # table-cell border fragment, a text-field underline+box) could pass
+        # every other check here and get promoted to a candidate. Skipped
+        # rather than treated as reject-worthy evidence: an elongated shape
+        # just isn't the checkbox this crop is looking for, unlike a failed
+        # rectangularity check, which specifically signals a hand-drawn fake
+        # (issue #8) - a bad-aspect contour shouldn't hard-reject the whole
+        # location when another contour in the same crop might still be it.
+        aspect_ratio = w / h
+        min_aspect = ASPECT_RATIO_MIN / HINT_ASPECT_TOLERANCE_FACTOR
+        max_aspect = ASPECT_RATIO_MAX * HINT_ASPECT_TOLERANCE_FACTOR
+        if not (min_aspect <= aspect_ratio <= max_aspect):
+            continue
         perimeter = cv2.arcLength(contour, True)
         approx = cv2.approxPolyDP(contour, CORNER_EPSILON_FACTOR * perimeter, True)
         if len(approx) != 4:
@@ -564,8 +578,19 @@ def find_missing_boxes(
         if any(_iou(hint_xywh, e) > HINT_COVERED_IOU_THRESHOLD for e in existing_candidates):
             continue
         recovered = _recover_hint_candidate(binary_full, hint.bbox)
-        if recovered is not None:
-            new_candidates.append(recovered)
+        if recovered is None:
+            continue
+        # Re-check the box _recover_hint_candidate actually returned, not
+        # just the hint's own raw bbox checked above: local search can shift
+        # the result enough that it now overlaps an existing pixel-pipeline
+        # candidate even when the original hint didn't. Additive-only means
+        # never touching a box already found - if this recovery lands on top
+        # of one, drop it rather than let it become a near-duplicate that
+        # could out-compete the original in deduplicate_boxes' area-based
+        # tie-break later.
+        if any(_iou(recovered, e) > HINT_COVERED_IOU_THRESHOLD for e in existing_candidates):
+            continue
+        new_candidates.append(recovered)
     return new_candidates
 
 

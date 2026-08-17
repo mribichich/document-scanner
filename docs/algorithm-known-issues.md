@@ -405,6 +405,36 @@ to work around. Not pursued further this pass.
 real checkbox slot is a separate, currently-unrecovered gap from the fake
 shape sitting near it). `find_missing_boxes()` currently just skips these.
 
+**Hardened after a code review of the initial implementation, 2026-08-17:**
+two real gaps found and fixed, one edge case closed defensively:
+
+- `_local_shape_verdict` reimplements `find_checkbox_candidates`'s size/
+  corner-count/rectangularity/extent checks for the local-search crop, but
+  had dropped the aspect-ratio filter every other candidate in this
+  pipeline goes through — a genuine but non-square rectangular structure
+  near a hint (a table-cell border fragment, a text-field underline+box)
+  could have passed every remaining check and been promoted to a false
+  candidate. Fixed: added the same bound, loosened by
+  `HINT_ASPECT_TOLERANCE_FACTOR` to match `_hint_bbox_plausible`'s own
+  margin.
+- Zero test coverage existed for the exact branch already documented above
+  as a caught live bug (an erasure-caused rejection must not block the
+  fallback). Hand-reproducing the precise cv2 contour geometry proved
+  fiddly; added targeted tests that control `_local_shape_verdict`'s
+  return values directly instead, testing `_recover_hint_candidate`'s
+  control flow deterministically rather than depending on contour
+  geometry lining up exactly.
+- `find_missing_boxes` only checked a hint's own raw bbox against existing
+  candidates before attempting recovery; the box actually returned by
+  `_recover_hint_candidate` could shift enough during local repair to newly
+  overlap an existing candidate. Added a second check on the recovered
+  bbox itself, closing a narrow path to violating the additive-only
+  guarantee.
+
+Re-validated live after all three fixes: identical results to the
+pre-review run on all 4 samples — confirms the fixes closed real gaps
+without disturbing the 3 recoveries. 51/51 tests passing.
+
 ### 8. Hand-drawn shapes can mimic a checkbox's 4-corner, correct-extent silhouette
 
 **Where:** `find_checkbox_candidates` — the corner-count/aspect-ratio/

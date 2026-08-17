@@ -458,3 +458,81 @@ def test_hint_bbox_plausible_rejects_implausible_aspect_ratio():
 
 def test_hint_bbox_plausible_accepts_normal_checkbox_size():
     assert _hint_bbox_plausible((713, 492, 736, 514)) is True
+
+
+def test_local_shape_verdict_rejects_a_valid_but_non_square_rectangle():
+    # find_checkbox_candidates enforces ASPECT_RATIO_MIN/MAX everywhere
+    # else in the pipeline; _local_shape_verdict must too, or a genuine
+    # non-checkbox rectangular structure near a hint (a table-cell border
+    # fragment, a text-field underline+box) could get promoted to a
+    # candidate purely for being correctly-sized and rectangular.
+    gray = make_blank_gray(150, 150)
+    cv2.rectangle(gray, (50, 50), (74, 100), color=0, thickness=2)  # 24x48, aspect 0.5
+
+    binary_full = detect_cv._adaptive_binary(gray)
+    verdict, bbox = detect_cv._local_shape_verdict(binary_full[45:105, 45:80])
+
+    assert verdict != "accept"
+
+
+# --- _recover_hint_candidate control flow (monkeypatched _local_shape_verdict) --
+#
+# The exact geometry that makes local diagonal-stroke erasure damage a real
+# border (turning a "no_shape" raw verdict into an erasure-caused "reject")
+# is fiddly to reproduce reliably through cv2 drawing calls — the real bug
+# this guards against (see algorithm-known-issues.md issue #9's "live bug
+# caught during validation") was found on real Textract output, not a
+# synthetic case. Controlling _local_shape_verdict's two return values
+# directly tests the intended control flow precisely and deterministically,
+# independent of cv2 contour geometry, and documents the exact behavior
+# being locked in.
+
+
+def test_erasure_caused_rejection_does_not_block_the_fallback_accept(monkeypatch):
+    # raw crop verdict "no_shape" (a border fused into a many-cornered blob
+    # — neither evidence for nor against), erasure-repair verdict "reject"
+    # (the repair itself damaged the border). The post-erasure reject must
+    # NOT block the final trust-Textract fallback — only a reject from the
+    # untouched crop is real evidence, exactly the bug fixed after the
+    # first live validation run silently dropped the real "No Zoning" box.
+    verdicts = iter([("no_shape", None), ("reject", None)])
+    monkeypatch.setattr(detect_cv, "_local_shape_verdict", lambda crop: next(verdicts))
+
+    gray = make_blank_gray(150, 150)
+    binary_full = detect_cv._adaptive_binary(gray)
+
+    result = detect_cv._recover_hint_candidate(binary_full, (50, 50, 73, 72))
+
+    assert result == (50, 50, 23, 22)  # falls back to trusting the hint's own bbox
+
+
+def test_erasure_producing_a_valid_shape_is_accepted(monkeypatch):
+    verdicts = iter([("no_shape", None), ("accept", (5, 5, 23, 22))])
+    monkeypatch.setattr(detect_cv, "_local_shape_verdict", lambda crop: next(verdicts))
+
+    gray = make_blank_gray(150, 150)
+    binary_full = detect_cv._adaptive_binary(gray)
+
+    result = detect_cv._recover_hint_candidate(binary_full, (50, 50, 73, 72))
+
+    padding = detect_cv.HINT_SEARCH_PADDING
+    rx1, ry1 = 50 - padding, 50 - padding
+    assert result == (rx1 + 5, ry1 + 5, 23, 22)
+
+
+def test_reject_on_the_untouched_crop_is_a_hard_stop_no_erasure_attempted(monkeypatch):
+    calls = []
+
+    def fake_verdict(crop):
+        calls.append(1)
+        return "reject", None
+
+    monkeypatch.setattr(detect_cv, "_local_shape_verdict", fake_verdict)
+
+    gray = make_blank_gray(150, 150)
+    binary_full = detect_cv._adaptive_binary(gray)
+
+    result = detect_cv._recover_hint_candidate(binary_full, (50, 50, 73, 72))
+
+    assert result is None
+    assert len(calls) == 1  # erasure repair never attempted after a raw reject
