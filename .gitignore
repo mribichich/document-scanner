@@ -7,18 +7,14 @@ infra/crash.log
 infra/*.tfvars
 !infra/*.tfvars.example
 
-# Go
-lambda/**/bootstrap
-lambda/**/*.zip
-
 # Python
 lambda/**/venv/
 lambda/**/__pycache__/
 lambda/**/*.pyc
 .pytest_cache/
 
-# Detection results (per-run, per-algo, timestamped local artifacts - not committed)
-# Matches samples/results/ (current scheme: samples/results/<algo>/<timestamp>/) as
+# Detection results (per-run, timestamped local artifacts - not committed)
+# Matches samples/results/ (current scheme: samples/results/<timestamp>/) as
 # well as legacy samples/results_0/, samples/results_1/ dirs from before this scheme.
 samples/results*/
 

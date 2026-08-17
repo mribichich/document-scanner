@@ -15,28 +15,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.26.6"
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.13.15"
 
-      - name: Build Go Lambda (compile check)
+      - name: Install detection pipeline test dependencies
         working-directory: lambda/detect
-        run: go build -o /dev/null .
-
-      - name: Install CV pipeline test dependencies
-        working-directory: lambda/detect-cv
         run: |
           python3 -m venv venv
           venv/bin/pip install -r requirements-dev.txt
 
-      - name: Run CV pipeline test suite
-        working-directory: lambda/detect-cv
+      - name: Run detection pipeline test suite
+        working-directory: lambda/detect
         run: venv/bin/pytest -v
 
       - name: Set up Terraform
@@ -58,7 +49,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # infra/detect_cv.tf builds the CV Lambda's image with `docker build
+      # infra/detect.tf builds the Lambda's image with `docker build
       # --platform linux/arm64` (matching the Lambda's arm64 architecture),
       # but GitHub-hosted runners are amd64 — without QEMU registered,
       # `RUN` steps inside that build fail with "exec format error" (the
@@ -94,7 +85,7 @@ jobs:
         working-directory: infra
         run: terraform apply -input=false -auto-approve -no-color
 
-      - name: Smoke test the deployed CV endpoint
+      - name: Smoke test the deployed endpoint
         working-directory: infra
         run: |
           ENDPOINT=$(terraform output -raw detect_endpoint)

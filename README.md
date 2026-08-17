@@ -8,12 +8,7 @@ the full spec.
 
 ```
 POST /detect
-POST /detect-textract
 ```
-
-Both routes accept the same request and return the same response shape —
-they're two independent implementations of the same contract (see
-"Architecture" below for why there are two).
 
 - **Input:** a document image, sent as a file upload.
 - **Output:**
@@ -33,70 +28,66 @@ they're two independent implementations of the same contract (see
 ## Architecture
 
 ```
-                        ,--POST /detect----------> Lambda "detect-cv" (Python, container image)
-                        |                             --> classic CV pipeline (OpenCV: contours +
-API Gateway (HTTP API) -+                                 geometric filtering + ink-density check)
-                        |
-                        `--POST /detect-textract-> Lambda "detect" (Go, provided.al2023)
-                                                      --> AWS Textract (AnalyzeDocument, FeatureTypes=FORMS)
+API Gateway (HTTP API) --POST /detect--> Lambda "detect" (Python, container image)
+                                            --> classic CV pipeline (OpenCV: contours +
+                                                geometric filtering + ink-density check)
+                                            --> Textract FORMS analysis (label-position
+                                                hints only, for gap recovery)
 ```
 
-`POST /detect` is the default, actively-developed implementation: a
-classic computer-vision pipeline running in a Python Lambda
-(`lambda/detect-cv/`, deployed as a container image). `POST /detect-textract`
-is the original Go/Textract implementation — unchanged except for its route
-path — kept deployed for side-by-side comparison rather than deleted. See
-`docs/superpowers/specs/2026-08-14-cv-checkbox-detection-design.md` for the
-full rationale, including the two concrete Textract failure cases (a false
-positive from a stray scratch mark, a false negative under a watermark)
-that motivated building the CV pipeline.
+A classic computer-vision pipeline running in a Python Lambda
+(`lambda/detect/`, deployed as a container image): grayscale + adaptive
+threshold -> `findContours` -> geometric filtering (size, aspect ratio,
+corner count, rectangularity) to find checkbox-shaped candidates ->
+IoU-based deduplication of nested contours -> per-box classification via
+ink-density + a containment check (a mark is "checked" only if it's sized
+to fit inside the box, not a fragment of a longer stroke passing through
+it). All tunable constants live at the top of `detect_cv.py`.
 
-**CV pipeline** (`lambda/detect-cv/detect_cv.py`): grayscale + threshold ->
-`findContours` -> geometric filtering (size, aspect ratio, corner count,
-rectangularity) to find checkbox-shaped candidates -> IoU-based
-deduplication of nested contours -> per-box classification via ink-ratio +
-a containment check (a mark is "checked" only if it's sized to fit inside
-the box, not a fragment of a longer stroke passing through it). All
-tunable constants live at the top of that file. `handler.py`'s error
-responses never leak internal detail to the caller: a bad request body
-maps to a generic `400`, and any other unexpected exception maps to a
-generic `500` with a fixed `{"error": "internal error"}` body — the full
-exception is logged via `logging.exception` first, which Lambda
-automatically ships to CloudWatch Logs, so the detail is still there for
-debugging without ever reaching the response.
+This pipeline also calls AWS Textract's `AnalyzeDocument` (`FORMS` feature
+type) as an enhancement layered on top, purely for label→checkbox location
+hints (`textract_hints.py`) — never for Textract's own checked/unchecked
+call, which has a known false-positive failure mode (a stray mark crossing
+a box's border reads as "selected"). When a label's associated checkbox
+wasn't found by the pixel pipeline at all, this hint drives a small local
+search to recover it; classification still goes entirely through this
+project's own logic. See `docs/algorithm-known-issues.md` issue #7 for the
+full mechanism, and issues #9/#10 for two real misses (including the
+project's original motivating case) this recovered. This call is a pure
+enhancement, not a dependency: any Textract failure (network, credentials,
+throttling) falls back to CV-only results rather than breaking the
+request.
 
-**Textract pipeline** (`lambda/detect/main.go`): parses the uploaded image
-(raw body or `multipart/form-data`), calls Textract's `AnalyzeDocument`
-with the `FORMS` feature type, and maps every `SELECTION_ELEMENT` block
-(checkboxes/radio buttons) it returns into a pixel-coordinate `bbox` +
-`is_checked` entry — converting Textract's relative (0-1) bounding boxes
-using the source image's actual pixel dimensions.
+`handler.py`'s error responses never leak internal detail to the caller: a
+bad request body maps to a generic `400`, and any other unexpected
+exception maps to a generic `500` with a fixed `{"error": "internal
+error"}` body — the full exception is logged via `logging.exception`
+first, which Lambda automatically ships to CloudWatch Logs, so the detail
+is still there for debugging without ever reaching the response.
 
-- `infra/` — Terraform: API Gateway HTTP API, both Lambda functions (one
-  zip-deployed, one container-image), their IAM roles (the Textract
-  Lambda's includes Textract access; the CV Lambda's is CloudWatch-Logs-only),
-  the CV Lambda's ECR repository, CloudWatch log groups.
-- `lambda/detect/` — Go Lambda source (`main.go`) for `/detect-textract`.
-  Terraform compiles this to a `bootstrap` binary and zips it before
-  deploy.
-- `lambda/detect-cv/` — Python Lambda source for `/detect`:
-  `detect_cv.py` (core detection algorithm), `handler.py` (Lambda entry
-  point), `cli.py` (local dev/tuning tool, not deployed), `Dockerfile`
-  (container image — required because `opencv-python-headless` needs
-  native shared libraries, so this Lambda is `package_type = "Image"`
-  rather than zip-deployed like the Go one), `tests/` (pytest suite).
+- `infra/` — Terraform: API Gateway HTTP API, the Lambda function
+  (container-image), its IAM role (CloudWatch Logs + `textract:AnalyzeDocument`),
+  its ECR repository, CloudWatch log group.
+- `lambda/detect/` — Python Lambda source: `detect_cv.py` (core detection
+  algorithm), `textract_hints.py` (Textract FORMS integration for gap
+  recovery), `handler.py` (Lambda entry point), `cli.py` (local dev/tuning
+  tool, not deployed), `Dockerfile` (container image — required because
+  `opencv-python-headless` needs native shared libraries, so this Lambda
+  is `package_type = "Image"` rather than zip-deployed), `tests/` (pytest
+  suite).
 - `samples/` — 4 real appraisal-document images (extracted from
   `challenge.pdf`'s embedded sample images) for testing detection quality.
-  `samples/results/<algo>/<timestamp>/` is where local runs write raw JSON
-  responses and annotated (bbox-overlaid) PNGs — `<algo>` is `cv` or
-  `textract`, `<timestamp>` identifies the run, so different runs (and both
-  algorithms) never collide and can be compared side by side. This tree is
-  gitignored — it's a local, per-run scratch area, not committed — see
-  "Testing" below.
+  `samples/results/<timestamp>/` is where local runs write raw JSON
+  responses and annotated (bbox-overlaid) PNGs — `<timestamp>` identifies
+  the run, so different runs never collide and can be diffed against each
+  other. This tree is gitignored — it's a local, per-run scratch area, not
+  committed — see "Testing" below.
 - `scripts/annotate_detections.py` — draws detected boxes over the sample
-  images (green = checked, red = unchecked) so Textract results can be
-  reviewed visually. (The CV pipeline's `cli.py` draws its own annotated
-  output directly — see "Local CV development loop" below.)
+  images (green = checked, red = unchecked) for visualizing a
+  `call_detect_api.sh` results folder. (`cli.py`'s local dev loop already
+  writes its own annotated output directly — see "Local development loop"
+  below — this script is for visualizing responses from the deployed
+  endpoint instead.)
 
 ## Prerequisites
 
@@ -104,7 +95,6 @@ This project pins tool versions with [asdf](https://asdf-vm.com/). Install
 asdf itself first, then:
 
 ```bash
-asdf plugin add golang
 asdf plugin add terraform
 asdf plugin add awscli
 asdf plugin add python
@@ -112,14 +102,14 @@ asdf plugin add github-cli
 asdf install
 ```
 
-This installs the exact Go, Terraform, AWS CLI, Python, and GitHub CLI
+This installs the exact Terraform, AWS CLI, Python, and GitHub CLI
 versions listed in `.tool-versions`. GitHub CLI (`gh`) isn't required to
 develop or deploy this project — it's only used for inspecting GitHub
 Actions runs (see "CI/CD" below) and is optional.
 
 ### Docker
 
-Building and pushing the CV Lambda's container image (`lambda/detect-cv/`)
+Building and pushing the Lambda's container image (`lambda/detect/`)
 requires [Docker](https://docs.docker.com/get-docker/) (e.g. Docker
 Desktop) to be installed and running locally — Terraform shells out to
 `docker build`/`docker push` as part of `terraform apply` (see "Deploy"
@@ -127,44 +117,19 @@ below). Docker is **not** asdf-managed: asdf pins language/CLI tool
 versions, but a container runtime is a different kind of dependency, so
 install it the normal way for your OS.
 
-You don't need Docker just to run the CV algorithm locally, though — the
-`cli.py` dev loop (see "Local CV development loop" under Testing) only
-needs a plain Python virtualenv.
+You don't need Docker just to run the algorithm locally, though — the
+`cli.py` dev loop (see "Local development loop" under Testing) only needs
+a plain Python virtualenv.
 
-### Lambda (Go) dependencies
+### Lambda (Python) dependencies
 
-`lambda/detect/go.mod` and `go.sum` are committed, so you normally don't
-need to do anything — `go build` (which Terraform runs for you on every
-`apply`) resolves and downloads whatever `go.sum` pins automatically. If
-you want to fetch them ahead of time (e.g. to work offline afterwards) or
-just sanity-check the module:
-
-```bash
-cd lambda/detect
-go mod download
-go build -o /dev/null .   # compiles for your local OS/arch, just to check for errors
-```
-
-**Adding or upgrading a dependency:**
+`lambda/detect/requirements.txt` (runtime: `opencv-python-headless`,
+`numpy`, `boto3`) and `requirements-dev.txt` (adds `pytest`) are
+committed. For local development (running `cli.py` or the test suite),
+set up a virtualenv once:
 
 ```bash
 cd lambda/detect
-go get <module>[@version]   # e.g. go get github.com/aws/aws-sdk-go-v2/service/textract
-go mod tidy                 # cleans up go.mod/go.sum, marks direct vs indirect correctly
-```
-
-Commit the updated `go.mod` and `go.sum` — Terraform's build step relies on
-them being present and consistent; it doesn't run `go mod tidy` itself.
-
-### Lambda (Python CV) dependencies
-
-`lambda/detect-cv/requirements.txt` (runtime: `opencv-python-headless`,
-`numpy`) and `requirements-dev.txt` (adds `pytest`) are committed. For
-local development (running `cli.py` or the test suite), set up a
-virtualenv once:
-
-```bash
-cd lambda/detect-cv
 python3 -m venv venv
 venv/bin/pip install -r requirements-dev.txt
 ```
@@ -173,7 +138,9 @@ This venv is only needed for local dev/testing — it's not used at deploy
 time. The deployed Lambda instead builds `requirements.txt` into a
 container image via `Dockerfile` (see "Docker" above and "Deploy" below).
 
-Run the tests with `venv/bin/python3 -m pytest` from `lambda/detect-cv/`.
+Run the tests with `venv/bin/python3 -m pytest` from `lambda/detect/`.
+Running `cli.py` (but not the test suite) also needs AWS credentials with
+`textract:AnalyzeDocument` — see "Local development loop" below.
 
 ### AWS account setup (manual, one-time)
 
@@ -201,7 +168,7 @@ aws iam attach-user-policy \
 
 # The actual deploy permissions (Lambda, API Gateway, IAM role for the
 # Lambda's own execution role, CloudWatch Logs, Textract, ECR for the
-# CV Lambda's container image)
+# Lambda's container image)
 aws iam put-user-policy \
   --user-name document-scanner-deployer \
   --policy-name document-scanner-deploy \
@@ -324,14 +291,12 @@ local state (creates the bucket and everything else), then uncomment the
 backend block, update the bucket name in it to match your account ID, and
 run `terraform init -migrate-state` to move local state into it.
 
-Terraform will cross-compile the Go Lambda (`GOOS=linux GOARCH=arm64`) and
-also build + push the CV Lambda's container image (`docker build
---platform linux/arm64 ...` against `lambda/detect-cv/Dockerfile`, then
+Terraform will build + push the Lambda's container image (`docker build
+--platform linux/arm64 ...` against `lambda/detect/Dockerfile`, then
 `docker push` to a per-project ECR repo it creates) as part of the apply —
 Docker must be running locally for this step (see "Docker" under
-Prerequisites). On success it prints `detect_endpoint` (the CV pipeline)
-and `detect_textract_endpoint` (the Go/Textract pipeline), the full URLs
-of the two deployed routes.
+Prerequisites). On success it prints `detect_endpoint`, the full URL of
+the deployed route.
 
 > **Gotcha:** right after creating/updating the IAM user's inline policy
 > (step 1 above), the very first `terraform apply` may fail with
@@ -344,7 +309,7 @@ of the two deployed routes.
 > `InvalidParameterValueException: image manifest ... not supported`,
 > it's because some Docker Desktop versions' `buildx` builder emits
 > provenance/SBOM attestation manifests by default that Lambda's container
-> image support rejects. `infra/detect_cv.tf` already passes
+> image support rejects. `infra/detect.tf` already passes
 > `--provenance=false --sbom=false` to `docker build` to avoid this, but if
 > you hit an equivalent error with a different Docker setup/version, that
 > flag pair is the fix to look for.
@@ -354,8 +319,8 @@ of the two deployed routes.
 `.github/workflows/deploy.yml` runs on every push and pull request against
 `main`:
 
-- **`test` job** (always runs): compiles the Go Lambda, runs the full
-  `lambda/detect-cv` pytest suite, and checks Terraform formatting.
+- **`test` job** (always runs): runs the full `lambda/detect` pytest suite
+  and checks Terraform formatting.
 - **`deploy` job** (push to `main` only, after `test` passes): runs
   `terraform apply` for real, then smoke-tests the deployed `/detect`
   endpoint against `samples/appraisal-1.png` and fails the job if it
@@ -399,14 +364,14 @@ your own AWS account ID once the role exists
 
 ## Testing
 
-### Local CV development loop
+### Local development loop
 
-The fastest way to iterate on the CV algorithm itself is `cli.py`, which
-runs `detect_cv.py` directly against local files — no Lambda, no API
-Gateway, no deploy:
+The fastest way to iterate on the algorithm itself is `cli.py`, which runs
+`detect_cv.py` directly against local files — no Lambda, no API Gateway,
+no deploy:
 
 ```bash
-cd lambda/detect-cv
+cd lambda/detect
 python3 -m venv venv && venv/bin/pip install -r requirements-dev.txt   # one-time, see Prerequisites
 venv/bin/python3 cli.py <image_or_folder>
 ```
@@ -415,13 +380,13 @@ venv/bin/python3 cli.py <image_or_folder>
 `AWS_PROFILE=document-scanner`) since `detect_checkboxes` also calls
 Textract's FORMS analysis for gap-recovery hints (see
 `docs/algorithm-known-issues.md` issue #7, `textract_hints.py`) — this is
-the one part of the CV pipeline that isn't purely local. It fails open:
+the one part of the pipeline that isn't purely local. It fails open:
 missing/expired credentials just mean the run falls back to CV-only
 results (logged, not raised), so `cli.py` still works without AWS
 configured, just without the Textract-recovered boxes. The pytest suite
 below does **not** need AWS credentials — it stubs this call out.
 
-For each image, it writes into a timestamped `results/cv/<timestamp>/`
+For each image, it writes into a timestamped `results/<timestamp>/`
 subfolder alongside the input, so every run is kept separate from the last:
 
 - `<name>.json` — the raw `{"boxes": [...]}` response
@@ -430,7 +395,7 @@ subfolder alongside the input, so every run is kept separate from the last:
   correctness immediately without a separate visualization step
 
 E.g. `venv/bin/python3 cli.py ../../samples` processes all 4 sample images
-and writes `samples/results/cv/<timestamp>/appraisal-{1..4}.{json,png}`
+and writes `samples/results/<timestamp>/appraisal-{1..4}.{json,png}`
 (`<timestamp>` is a UTC value like `20260816T143022Z`, generated fresh each
 run). This is the loop used to calibrate the constants at the top of
 `detect_cv.py` (`MIN_BOX_SIZE`, `MAX_BOX_SIZE`, `MIN_EXTENT_RATIO`, etc.) —
@@ -441,20 +406,12 @@ tree (`samples/results/`) is gitignored — it's local scratch output, not
 committed.
 
 The pytest suite (`tests/`) covers the same code with unit/integration
-tests; run it with `venv/bin/python3 -m pytest` from `lambda/detect-cv/`.
+tests; run it with `venv/bin/python3 -m pytest` from `lambda/detect/`.
 
 ### Quick check with any image
 
-Either endpoint accepts the same request shape — swap `detect_endpoint`
-for `detect_textract_endpoint` to hit the Go/Textract implementation
-instead:
-
 ```bash
 curl -X POST "$(terraform -chdir=infra output -raw detect_endpoint)" \
-  -F "file=@/path/to/some-document.jpg" \
-  -w "\nHTTP %{http_code}\n"
-
-curl -X POST "$(terraform -chdir=infra output -raw detect_textract_endpoint)" \
   -F "file=@/path/to/some-document.jpg" \
   -w "\nHTTP %{http_code}\n"
 ```
@@ -462,14 +419,10 @@ curl -X POST "$(terraform -chdir=infra output -raw detect_textract_endpoint)" \
 ### Test against the live URL directly
 
 If you just want to hit the currently-deployed dev environment without
-running Terraform yourself, use its fixed endpoints:
+running Terraform yourself, use its fixed endpoint:
 
 ```bash
 curl -X POST https://quslj98to1.execute-api.us-east-1.amazonaws.com/detect \
-  -F "file=@/path/to/some-document.jpg" \
-  -w "\nHTTP %{http_code}\n"
-
-curl -X POST https://quslj98to1.execute-api.us-east-1.amazonaws.com/detect-textract \
   -F "file=@/path/to/some-document.jpg" \
   -w "\nHTTP %{http_code}\n"
 ```
@@ -477,40 +430,33 @@ curl -X POST https://quslj98to1.execute-api.us-east-1.amazonaws.com/detect-textr
 This base URL is whatever `terraform apply` last produced in this
 account — it changes if the API Gateway resource is ever destroyed and
 recreated, so treat it as a convenience snapshot, not a stable contract.
-The authoritative values are always `terraform -chdir=infra output
-detect_endpoint` and `terraform -chdir=infra output detect_textract_endpoint`.
+The authoritative value is always `terraform -chdir=infra output
+detect_endpoint`.
 
 ### Test against a folder of images
 
 `scripts/call_detect_api.sh` sends every `.png`/`.jpg`/`.jpeg` in a folder
-to whichever endpoint you give it, prints a one-line summary per file
-(HTTP status, boxes detected, checked/unchecked counts), and saves each
-raw JSON response into a timestamped `results/<algo>/<timestamp>/`
-subfolder it creates alongside the images. It infers `<algo>` (`cv` or
-`textract`) from the endpoint URL's route path (`/detect` vs.
-`/detect-textract`), so results from both implementations — and from
-different runs — never collide:
+to the endpoint you give it, prints a one-line summary per file (HTTP
+status, boxes detected, checked/unchecked counts), and saves each raw
+JSON response into a timestamped `results/<timestamp>/` subfolder it
+creates alongside the images:
 
 ```bash
 ./scripts/call_detect_api.sh <folder> [endpoint_url]
 ```
 
 `endpoint_url` is optional — it defaults to
-`terraform -chdir=infra output -raw detect_endpoint` (the CV pipeline). To
-target the Textract pipeline instead, pass it explicitly:
+`terraform -chdir=infra output -raw detect_endpoint`.
 
 ```bash
-./scripts/call_detect_api.sh samples "$(terraform -chdir=infra output -raw detect_endpoint)"
-./scripts/call_detect_api.sh samples "$(terraform -chdir=infra output -raw detect_textract_endpoint)"
+./scripts/call_detect_api.sh samples
 ```
 
 Works against any folder, not just `samples/`.
 
-Each run's output lives at `results/<algo>/<timestamp>/<name>.json`, so
-running the script twice against the same folder — whether against the
-same endpoint again or the other one — never overwrites a previous run's
-files; every run gets its own timestamp and every algorithm gets its own
-subfolder.
+Each run's output lives at `results/<timestamp>/<name>.json`, so running
+the script twice against the same folder never overwrites a previous
+run's files — every run gets its own timestamp.
 
 ### Test against the sample appraisal documents
 
@@ -520,12 +466,9 @@ images — actual Fannie Mae/Freddie Mac appraisal forms full of checkboxes,
 both filled and empty):
 
 ```bash
-./scripts/call_detect_api.sh samples                                                              # CV, /detect
-./scripts/call_detect_api.sh samples "$(terraform -chdir=infra output -raw detect_textract_endpoint)"  # Textract, /detect-textract
+./scripts/call_detect_api.sh samples
 ```
 
-(Both commands are safe to run back-to-back — each writes into its own
-`samples/results/<algo>/<timestamp>/` folder, so nothing gets overwritten.)
 Or by hand, one file at a time:
 
 ```bash
@@ -557,13 +500,9 @@ Or pretty-print one box to check the shape:
 python3 -m json.tool /tmp/resp-1.json | head -10
 ```
 
-Known-good results as of the last verified deploy of each implementation
-(these are dense, multi-page appraisal forms; small shifts are normal —
-Textract's numbers may drift slightly as its underlying model updates, CV
-numbers only change if `detect_cv.py`'s constants are recalibrated):
-
-**CV pipeline** (`/detect`, from `lambda/detect-cv/cli.py` — see
-"Local CV development loop" above):
+Known-good results as of the last verified deploy (these are dense,
+multi-page appraisal forms; small shifts are normal if `detect_cv.py`'s
+constants are ever recalibrated):
 
 | Sample            | Boxes detected | Checked | Unchecked |
 | ------------------ | -------------- | ------- | --------- |
@@ -572,23 +511,7 @@ numbers only change if `detect_cv.py`'s constants are recalibrated):
 | appraisal-3.png    | 48             | 12      | 36        |
 | appraisal-4.png    | 79             | 28      | 51        |
 
-**Textract pipeline** (`/detect-textract`, unchanged from the original
-implementation):
-
-| Sample            | Boxes detected | Checked | Unchecked |
-| ------------------ | -------------- | ------- | --------- |
-| appraisal-1.png    | 98             | 33      | 65        |
-| appraisal-2.png    | 39             | 17      | 22        |
-| appraisal-3.png    | 48             | 12      | 36        |
-| appraisal-4.png    | 71             | 26      | 45        |
-
-These box counts aren't expected to match between the two implementations
-(different algorithms, tuned independently) — see "Visualizing detections"
-below and `docs/superpowers/specs/2026-08-14-cv-checkbox-detection-design.md`
-for why the CV pipeline finds more boxes on some pages and fewer on
-others.
-
-Expected response shape (same for both endpoints):
+Expected response shape:
 
 ```json
 {
@@ -600,40 +523,35 @@ Expected response shape (same for both endpoints):
 ```
 
 Raw responses aren't left in `/tmp` — running `scripts/call_detect_api.sh`
-(or `cli.py` for the CV pipeline) against `samples/` saves each run's
-output under `samples/results/<algo>/<timestamp>/appraisal-*.json`, so it
-can be diffed against or inspected later without re-running anything. This
-tree is gitignored (results are regenerated locally, not committed), so
-"the last verified run" is whatever you last ran locally — re-run the
-commands above to reproduce the numbers in the tables.
+(or `cli.py`) against `samples/` saves each run's output under
+`samples/results/<timestamp>/appraisal-*.json`, so it can be diffed
+against or inspected later without re-running anything. This tree is
+gitignored (results are regenerated locally, not committed), so "the last
+verified run" is whatever you last ran locally — re-run the commands
+above to reproduce the numbers in the table.
 
 ### Visualizing detections
 
-The JSON alone is hard to sanity-check.
-
-For the **CV pipeline**, `cli.py` (see "Local CV development loop" above)
-already writes `samples/results/cv/<timestamp>/appraisal-{1..4}-annotated.png`
-as part of every run — no separate step needed.
-
-For the **Textract pipeline**, `scripts/annotate_detections.py` draws
-every detected box over its source image (green outline =
-`is_checked: true`, red = `false`) the same way. It takes the results
-folder to read JSON from (and write annotated PNGs into) as its second
-argument — point it at the specific timestamped run you want to visualize,
-e.g. the one `call_detect_api.sh` against the Textract endpoint just
-created:
+The JSON alone is hard to sanity-check. `cli.py` (see "Local development
+loop" above) already writes
+`samples/results/<timestamp>/appraisal-{1..4}-annotated.png` as part of
+every run — no separate step needed. For visualizing a
+`call_detect_api.sh` results folder instead (e.g. from testing the live
+deployed endpoint), `scripts/annotate_detections.py` draws every detected
+box over its source image the same way (green outline =
+`is_checked: true`, red = `false`). It takes the results folder to read
+JSON from (and write annotated PNGs into) as its second argument:
 
 ```bash
 python3 -m venv /tmp/annotate-venv && /tmp/annotate-venv/bin/pip install --quiet Pillow
-RUN_DIR=samples/results/textract/<timestamp>  # from the call_detect_api.sh output above
+RUN_DIR=samples/results/<timestamp>  # from the call_detect_api.sh output above
 /tmp/annotate-venv/bin/python3 scripts/annotate_detections.py samples "$RUN_DIR"
 ```
 
 Outputs `$RUN_DIR/appraisal-{1..4}-annotated.png` alongside the JSON responses
 already in that folder.
 
-On the last verified visual review of the CV pipeline (same bar as the
-original Textract review — eyeball every box against the source image):
+On the last verified visual review (eyeball every box against the source image):
 both of the two concrete failure cases that motivated building the CV
 pipeline are now fixed. The "appraisal-2.png scratch line" case (see
 "Next steps" for the detail) took a second mechanism to actually close —
@@ -661,18 +579,11 @@ not here.
 ## Viewing logs
 
 ```bash
-# Textract Lambda (/detect-textract)
 aws logs tail /aws/lambda/document-scanner-dev-detect --profile document-scanner --follow
-
-# CV Lambda (/detect)
-aws logs tail /aws/lambda/document-scanner-dev-detect-cv --profile document-scanner --follow
 ```
 
-(Swap in `terraform -chdir=infra output -raw lambda_function_name` for the
-first command if the environment/function name ever changes from the
-default `dev` — that output currently only covers the Textract Lambda;
-the CV Lambda's log group name follows the same `document-scanner-<env>-detect-cv`
-pattern but isn't yet exposed as its own Terraform output.)
+(Swap in `terraform -chdir=infra output -raw lambda_function_name` if the
+environment/function name ever changes from the default `dev`.)
 
 ## Tear down
 
@@ -681,8 +592,8 @@ cd infra
 terraform destroy
 ```
 
-(This also deletes the CV Lambda's ECR repository and the container image
-in it — `force_delete = true` on `aws_ecr_repository.detect_cv` so
+(This also deletes the Lambda's ECR repository and the container image in
+it — `force_delete = true` on `aws_ecr_repository.detect` so
 `terraform destroy` doesn't get blocked by leftover images.)
 
 ## Next steps
@@ -694,7 +605,19 @@ pipeline fixes both of the two concrete Textract failure cases that
 motivated building it — including the appraisal-2 scratch-line case,
 which took a second, different mechanism (Textract-hint gap recovery, not
 another pixel/geometry fix) to actually close; see the first item below
-for what that took. Remaining ideas, roughly in priority order:
+for what that took.
+
+**The original Go/Textract-only implementation (`/detect-textract`) was
+removed 2026-08-17**, once the CV pipeline's own Textract-hint gap
+recovery (issue #7, below) meant there was no longer anything left to
+compare it against — this project's own history of using Textract as the
+detection method, including the two concrete failure cases that motivated
+building the CV pipeline in the first place, is preserved in
+`docs/superpowers/specs/2026-08-14-cv-checkbox-detection-design.md` and
+`docs/algorithm-known-issues.md`'s "Reference-data caveat" even though the
+endpoint itself no longer exists.
+
+Remaining ideas, roughly in priority order:
 
 - **Context/label-aware gap recovery (issue #7): built, level 2 only.**
   The CV pipeline now calls Textract's FORMS analysis (`textract_hints.py`)
@@ -735,9 +658,9 @@ for what that took. Remaining ideas, roughly in priority order:
   pipeline's own (already correct) logic. Live-validated: recovered with
   the correct `is_checked: false`, despite the scratch line running
   straight through it.
-- **Document-size / DPI generalization:** the CV pipeline's tunable
+- **Document-size / DPI generalization:** the pipeline's tunable
   constants (`MIN_BOX_SIZE`, `MAX_BOX_SIZE`, `MIN_EXTENT_RATIO`, etc., all
-  at the top of `lambda/detect-cv/detect_cv.py`) are calibrated in pixels
+  at the top of `lambda/detect/detect_cv.py`) are calibrated in pixels
   against this specific document family's rendering — the 4 sample
   appraisal forms, whose pixel dimensions themselves already range from
   2550x4200 (`appraisal-1.png`, `appraisal-3.png`) down to 1586x846
@@ -780,22 +703,22 @@ for what that took. Remaining ideas, roughly in priority order:
   containment check does not. No test exercises this case in either
   direction. Add a targeted test case before trusting this pipeline on
   documents beyond the 4 current samples.
-- **Retiring `/detect-textract`:** deliberately deferred — see
-  `docs/superpowers/specs/2026-08-14-cv-checkbox-detection-design.md`
-  ("Open questions"). Keep both endpoints live until there's enough
-  side-by-side comparison data (beyond the 4 samples) to justify dropping
-  one.
-- **Size limit (Textract path only):** Textract's synchronous
-  `AnalyzeDocument` caps document bytes at 5 MB; large/high-DPI scans over
-  that need the async, S3-backed Textract flow (`StartDocumentAnalysis` +
-  `GetDocumentAnalysis`) instead. The CV pipeline has no such API-level
-  contract limit, but `decode_image` in `lambda/detect-cv/detect_cv.py`
-  does reject raw uploads over `MAX_INPUT_BYTES` (8 MB) and, separately,
-  any image whose implied full-resolution pixel count exceeds
-  `MAX_IMAGE_PIXELS` (50 megapixels) — checked cheaply via an 8x-downscaled
-  probe decode before ever attempting a full-resolution one — to guard
-  against a small, highly-compressible upload decoding into a bitmap large
-  enough to OOM-kill the Lambda.
+- **Size limits:** the pipeline's own upload guard (`decode_image` in
+  `lambda/detect/detect_cv.py`) rejects raw uploads over `MAX_INPUT_BYTES`
+  (8 MB) and, separately, any image whose implied full-resolution pixel
+  count exceeds `MAX_IMAGE_PIXELS` (50 megapixels) — checked cheaply via a
+  header-only dimension probe before ever attempting a full decode, to
+  guard against a small, highly-compressible upload decoding into a
+  bitmap large enough to OOM-kill the Lambda. Separately, the Textract
+  FORMS call used for gap-recovery hints (`textract_hints.py`, issue #7)
+  goes through synchronous `AnalyzeDocument`, which caps document bytes at
+  5 MB regardless of `MAX_INPUT_BYTES` — an upload between 5-8 MB would
+  pass the pipeline's own guard but fail the Textract call. That failure
+  is caught and logged, not raised (Textract is a pure enhancement, see
+  "Architecture" above), so today it just means silently losing the
+  gap-recovery pass on larger documents rather than an error response.
+  Worth surfacing more visibly (or moving to the async, S3-backed
+  `StartDocumentAnalysis` flow) if large scans turn out to be common.
 - **IAM Identity Center migration:** see the TODO under "AWS account
   setup" (and its related ECR-permissions follow-up right below it) —
   replace the bootstrap IAM user with a real permission-set-based setup
@@ -803,6 +726,5 @@ for what that took. Remaining ideas, roughly in priority order:
 - **Handling documents very different from the sample set:** handwritten
   forms, non-Latin text, very low-DPI scans, and other layouts entirely
   unlike the dense printed appraisal forms in `samples/` are out of scope
-  until one is actually encountered — both implementations are tuned
-  against (Textract's model) or calibrated against (the CV pipeline's
-  constants) this specific document family.
+  until one is actually encountered — the pipeline's constants are
+  calibrated against this specific document family.

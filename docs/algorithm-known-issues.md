@@ -1,6 +1,6 @@
 # CV algorithm: known issues and misses
 
-Working backlog for `lambda/detect-cv/detect_cv.py`, to work through one at a
+Working backlog for `lambda/detect/detect_cv.py`, to work through one at a
 time. Every item below was reproduced against the real files in `samples/`
 and pixel-traced to a specific line of code — nothing here is a guess.
 Baseline counts referenced throughout (before any fix in this doc):

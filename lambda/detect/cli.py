@@ -8,7 +8,6 @@ import cv2
 from detect_cv import detect_checkboxes
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
-ALGO = "cv"
 
 
 def make_run_timestamp() -> str:
@@ -67,7 +66,7 @@ def main() -> None:
         print(f"No images found in {target}", file=sys.stderr)
         sys.exit(1)
 
-    results_dir = results_root / ALGO / make_run_timestamp()
+    results_dir = results_root / make_run_timestamp()
     results_dir.mkdir(parents=True, exist_ok=True)
     for image_path in images:
         process_image(image_path, results_dir)

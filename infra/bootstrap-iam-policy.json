@@ -95,7 +95,7 @@
       "Resource": "*"
     },
     {
-      "Sid": "EcrManageDetectCvRepo",
+      "Sid": "EcrManageDetectRepo",
       "Effect": "Allow",
       "Action": [
         "ecr:CreateRepository",
