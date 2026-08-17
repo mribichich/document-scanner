@@ -50,6 +50,25 @@ different technique entirely (e.g. edge/gradient-based detection instead
 of any brightness threshold, or morphological closing to bridge a
 discontinuous border before contour extraction).
 
+**Partially fixed 2026-08-17, via a completely different mechanism: issue
+#7's Textract-hint gap recovery.** `[281,187,307,210]` ("Neighborhood
+Boundaries") is exactly the kind of case #7 was built for — a real
+checkbox with a label that pixel thresholding can't reliably find on its
+own, recovered instead by trusting the label→checkbox association
+Textract's own FORMS analysis already makes, then confirming/refining
+locally rather than requiring a brightness threshold to work page-wide.
+Recovered with correct (unchecked) classification, live-validated against
+the real sample. **Checked, not assumed:** `[1098,491,1122,515]` (the
+second known instance) is *not* recovered — live Textract output for this
+sample has no KEY block with a resolved checkbox anywhere near that
+location at all, meaning Textract's own FORMS model doesn't find a
+checkbox there either, most likely for the same reason we don't (a border
+faint enough to sit below both systems' detection floor). #7 only helps
+when Textract itself succeeds where pixel thresholding fails; it can't
+recover a box neither system can see. Still open for this instance — the
+underlying pixel-threshold problem this issue describes is otherwise
+unchanged.
+
 ### 2. Shaded/non-white table-row backgrounds erase checkbox borders entirely
 
 **Where:** `find_checkbox_candidates`, same global threshold.
@@ -276,7 +295,7 @@ regression tests (`test_checked_when_box_sits_on_shaded_background`,
 `tests/test_detect_cv.py`) reproducing a shaded background synthetically.
 Full suite: 34/34 passing.
 
-### 7. No context/label awareness — detection is purely geometric today (future direction)
+### 7. No context/label awareness — detection is purely geometric today
 
 **Where:** the whole pipeline. Not a bug in existing code, a capability
 gap.
@@ -310,10 +329,81 @@ own checked/unchecked classification) and the most architecturally
 different from everything else in this document — not a constant to tune,
 a new pipeline stage.
 
-**Status:** not investigated yet — no prototype, no evidence beyond the
-idea itself. Needs its own scoped investigation (what OCR engine, cost/
-latency impact on the Lambda, false-positive-suppression vs. false-
-negative-recovery as separate sub-goals) before any implementation.
+**FIXED 2026-08-17 — level 2 (false-negative recovery), additive only.**
+Implemented as designed: `textract_hints.py` (new module) calls Textract
+`AnalyzeDocument` with `FeatureTypes=["FORMS"]` (the same call the Go
+`/detect-textract` Lambda already makes) and turns every `KEY_VALUE_SET`
+block into a `Hint(label, bbox)` — `bbox` is the associated
+`SELECTION_ELEMENT`'s geometry when Textract's own form model resolved
+one, `None` when it didn't. **Textract's own checked/unchecked call
+(`SelectionStatus`) is deliberately never read** — it has the exact false
+positive that motivated this whole CV pivot (a stray mark crossing a
+box's border reads as "selected"), so it would reintroduce the original
+bug if trusted. Only the geometry is used, as a location hint.
+
+`find_missing_boxes()` (in `detect_cv.py`) diffs Textract's hints against
+the CV pipeline's own candidates (IoU) and, for anything not already
+found, runs `_recover_hint_candidate()`: crop a small padded window at the
+hint's location, look for a valid rectangle there with the same
+`_is_rectangular`/extent checks every normal candidate goes through, retry
+after a *local* diagonal-stroke erasure if nothing's found (the same idea
+rejected page-wide for #9 — safe here because a single hint's tiny search
+window doesn't have the dense-text/grid noise that broke it at page
+scale), and only as a last resort — if nothing was found but nothing was
+explicitly *rejected* either — trust Textract's own bounding box. A
+rectangularity failure on the **untouched** crop is a hard reject (real
+evidence: an actual non-rectangular shape sits there); a rejection that
+only appears after the local erasure repair is not (it can be collateral
+damage from the repair itself — this was caught as a live bug during
+validation, see below). Additive only, per explicit user direction: this
+pass can add a candidate the pixel pipeline missed, never remove or
+re-classify one it already found.
+
+**Live-validated against all 4 real samples** (not simulated — actual
+`AnalyzeDocument` calls): appraisal-1/3/4 each show 0 Textract hints not
+already covered by the CV pipeline's own candidates (0 change). appraisal-2
+recovers all 3 of this session's known gaps, each independently confirmed
+against the ledger's own bbox estimates (IoU 0.84-0.88) with correct
+(unchecked) classification:
+
+- `[281,187,307,210]` "Neighborhood Boundaries" — see #1.
+- `~[715,490,738,514]` "No Zoning" — see #9. **The project's original
+  motivating case, now fixed.**
+- `~[196,613,220,637]` "Electricity" — see #10.
+
+And correctly does **not** recover the fake hand-drawn shape from #8
+(Textract's own FORMS model mislabels it "Public", at nearly the same
+bbox as the real fake shape) — its untouched-crop contour genuinely fails
+`_is_rectangular`, the same hard-reject signal a real candidate would hit,
+so the hint is rejected rather than blindly trusted. Confirmed live: the
+annotated output shows no box drawn over the fake shape.
+
+**A live bug caught during this validation, not assumed away:** the first
+implementation tried local diagonal-stroke erasure unconditionally and let
+its resulting verdict (accept/reject/no_shape) fully decide the outcome.
+On "No Zoning" specifically, the untouched crop shows an intact border
+fused with the scratch into a many-cornered blob (`no_shape` — it doesn't
+parse as exactly 4 corners either way) — but erasing the diagonal also
+ate into the real border near the top-left corner, turning it into a
+broken 4-corner shape that *then* failed rectangularity (`reject`). That
+would have silently reintroduced this exact miss. Fixed by only trusting a
+`reject` verdict from the untouched crop as genuine evidence — see the
+code comment on `_recover_hint_candidate` for the full reasoning.
+
+**Level 1 (false-positive suppression via missing-label flagging) was
+explicitly scoped out**, not attempted: checked live and found that
+Textract's own `SELECTION_ELEMENT` recognition misses 20 of the CV
+pipeline's 118 correctly-detected boxes on appraisal-1 alone (5/40 on
+appraisal-2, 8/79 on appraisal-4) — using "no matching Textract selection"
+as a removal signal would have deleted a lot of real, correctly-detected
+checkboxes, exactly the Textract limitation this whole CV pipeline exists
+to work around. Not pursued further this pass.
+
+**Not yet implemented:** the LLM fallback for a `Hint` with `bbox=None`
+(a label Textract's own form model never resolved at all — e.g. "Other
+(describe)" on appraisal-2 hit exactly this case in live data, since its
+real checkbox slot is a separate, currently-unrecovered gap from the fake
+shape sitting near it). `find_missing_boxes()` currently just skips these.
 
 ### 8. Hand-drawn shapes can mimic a checkbox's 4-corner, correct-extent silhouette
 
@@ -474,14 +564,32 @@ already-detected checkbox row (3 of 4 boxes in a row found at consistent
 spacing implies the 4th should exist too) — is really a narrow slice of
 issue #7 (context/label awareness) rather than a standalone fix; see #7.
 
-**Severity:** High (this is the box that started the whole project), but
-genuinely hard — four structurally different techniques (morphological
-bridging, global Hough-line rectangle reconstruction, diagonal-stroke
-removal in 3 filter variants, fragment-clustering local scoping) all tried
-and rejected on concrete evidence, not assumption. The clearest remaining
-path is building real row/column context-awareness (issue #7) and reusing
-its output as the seed for a local repair pass here, rather than any
-further page-wide heuristic. Open.
+**FIXED 2026-08-17 — via issue #7's Textract-hint gap recovery, exactly
+the path predicted above.** Not a fifth page-wide pixel heuristic —
+Textract's own FORMS analysis resolves a `SELECTION_ELEMENT` for the "No"
+half of the "No Zoning" label at `(712,491)-(735,514)`, matching this
+issue's own bbox estimate almost exactly. `_recover_hint_candidate()`
+finds an intact-but-fused border in the untouched local crop
+(`no_shape` — too many corners to parse as 4, but not a hand-drawn-shape
+rejection either), and since nothing explicitly rejects the location,
+falls back to trusting Textract's own geometry. Live-validated: recovered
+with correct (unchecked) classification against the real sample, 0
+regressions across all 4 samples. See #7 for the full mechanism and the
+live bug this validation caught (erasure-caused false rejection). The
+README's stale "fusion, not fragmentation" explanation (flagged above,
+2026-08-17) is now doubly out of date — not just the *mechanism* changed,
+the box is recovered entirely; still needs a README pass to reflect this
+(tracked as a documentation gap, not fixed in this pass).
+
+**Severity:** was High (this is the box that started the whole project) —
+now resolved. Four structurally different pixel/geometry techniques
+(morphological bridging, global Hough-line rectangle reconstruction,
+diagonal-stroke removal in 3 filter variants, fragment-clustering local
+scoping) were tried and rejected on concrete evidence before the fix that
+actually worked came from a completely different axis (context-awareness,
+issue #7) rather than another pixel heuristic — worth remembering next
+time a pixel-only approach keeps failing on a case with a clear textual
+label nearby.
 
 ### 10. Checkbox border obscured on all sides by an unusual "burst" mark pattern
 
@@ -507,12 +615,17 @@ border intact — far too destructive image-wide, collapsing the sample's
 total candidate count to 4 and then 0. Not viable even as a supplementary
 pass given how much it damages unrelated real candidates.
 
-**Severity:** Medium — a genuinely unusual mark pattern, no other instance
-of anything like it found across the other 3 samples. Same category of
-difficulty as #9 (needs a fundamentally different technique than
-contour-extraction-on-a-single-binary-pass), but lower priority given it's
-a single, unusual instance rather than the project's original motivating
-case. Open.
+**FIXED 2026-08-17 — same mechanism as #9, issue #7's Textract-hint gap
+recovery.** Textract's FORMS analysis resolves a `SELECTION_ELEMENT` for
+the "Electricity" row label at `(195,612)-(218,634)`, matching this
+issue's bbox almost exactly. Live-validated: recovered with correct
+(unchecked) classification, 0 regressions across all 4 samples — same run
+that recovered #1 and #9, see #7 for the shared mechanism.
+
+**Severity:** was Medium — now resolved. Same category of difficulty as
+#9 (contour-extraction-on-a-single-binary-pass genuinely couldn't solve
+this one), fixed by the same context-awareness mechanism rather than a
+dedicated pixel-level technique for this specific mark pattern.
 
 ## Reference-data caveat: ChatGPT's own outputs are not ground truth
 
@@ -545,46 +658,43 @@ throughout this project.
 
 | # | Issue | Status |
 |---|---|---|
-| 1 | Faint/light-gray borders (2 cases on appraisal-2) | **Open** — genuinely faint on all 4 sides, no threshold parameter fix found |
+| 1 | Faint/light-gray borders (2 cases on appraisal-2) | **Partially fixed** — 1/2 recovered via #7 (Textract resolves a label there); the other has no Textract-resolved label nearby either, still genuinely open |
 | 2 | Shaded table-row backgrounds (appraisal-3, 18 boxes) | **Fixed** — adaptive threshold, 0 regressions |
 | 3 | Thin X-mark ink-ratio near-misses (appraisal-1, 4 boxes) | **Fixed** — diagonal-normalized ink density, +1 bonus fix, 0 regressions |
 | 4 | Ink-blob shape gate | Open, no real instance yet |
 | 5 | appraisal-1 118 vs ~125 | **Closed** — full visual audit found 0 missing/spurious boxes; "~125" has no verifiable source and isn't ground truth |
 | 6 | Classification on shaded backgrounds | **Fixed**, same change as #2 |
-| 7 | Context/label awareness (OCR) | Open, not investigated |
+| 7 | Context/label awareness (Textract-hint gap recovery) | **Fixed (level 2, additive)** — live-validated against all 4 samples, recovered #1/#9/#10; level 1 (missing-label flagging) scoped out (would delete real boxes); LLM fallback for Textract-unresolved labels not yet built |
 | 8 | Hand-drawn shape mimicking a checkbox silhouette | **Fixed** — rectangularity check, 0 regressions (after a caught-and-corrected first attempt) |
-| 9 | "No Zoning" scratch-line box still undetected | **Open** — failure mode changed (fragmentation, not fusion), 4 fix attempts rejected (morphological closing; global Hough rectangle reconstruction; diagonal-stroke removal, 3 variants; fragment-clustering local scoping) — path forward is via #7 |
-| 10 | "Electricity" burst-pattern mark obscures border on all sides | **Open** — 1 fix attempt rejected as too destructive |
+| 9 | "No Zoning" scratch-line box still undetected | **Fixed 2026-08-17** — via #7's Textract-hint gap recovery, after 4 rejected pixel-only attempts (morphological closing; global Hough rectangle reconstruction; diagonal-stroke removal, 3 variants; fragment-clustering local scoping) |
+| 10 | "Electricity" burst-pattern mark obscures border on all sides | **Fixed 2026-08-17** — same mechanism as #9, via #7 |
 
-Current counts after #2/#3/#6/#8: appraisal-1 118/**37 checked** (was 33),
-appraisal-2 **40/16 checked** (was 41/17 — #8 removed the fake-shape false
-positive), appraisal-3 48/12 checked (unchanged since #2/#6), appraisal-4
-79/**28 checked** (was 29 — #3's bonus fix corrected one false positive).
-Full pytest suite: 35/35 passing.
+Current counts after #2/#3/#6/#7/#8: appraisal-1 118/**37 checked**
+(unchanged by #7 — 0 gaps found there), appraisal-2 **43/16 checked** (was
+40/16 — #7 recovered 3 real boxes, all unchecked), appraisal-3 48/12
+checked (unchanged by #7), appraisal-4 79/**28 checked** (unchanged by
+#7). Full pytest suite: 47/47 passing.
 
 ## Remaining working order
 
-1. **#7 (context/label awareness)** — promoted to active work 2026-08-17.
-   Four rejected #9 attempts converged on the same conclusion: further
-   page-wide pixel/geometry heuristics are the wrong tool, and the one
-   promising scoping signal found (a gap in an already-detected checkbox
-   row's rhythm) is naturally a piece of this issue, not a standalone fix.
-   Being designed as its own feature (see design doc once written) rather
-   than folded into #9's backlog entry.
-2. **#4 (ink-blob shape gate)** — needs a synthetic reproduction case
+1. **#4 (ink-blob shape gate)** — needs a synthetic reproduction case
    first, since no real instance exists yet in the sample set.
-3. **#9 ("No Zoning")** — highest real-world value (the project's original
-   motivating case), but four structurally different techniques are now
-   rejected on evidence (see issue body). Next attempt should build on
-   whatever #7 produces (row/column context) rather than another
-   standalone heuristic. Also still carries the README documentation-gap
-   task (its existing explanation is stale).
-4. **#10 ("Electricity" burst pattern)** — same technique gap as #9, lower
-   priority given it's a single, unusual instance.
-5. **#1** — no clear next step; would need a fundamentally different
-   technique (edge/gradient detection, or morphological gap-bridging) than
-   anything else in this document, not a parameter change. Lowest priority
-   unless more instances turn up (only 2 known).
+2. **#7's LLM fallback** — for a Textract `KEY` with no resolved
+   `SELECTION_ELEMENT` at all (e.g. "Other (describe)" on appraisal-2 hit
+   this in live data — its real checkbox slot is a separate, still-open
+   gap from the fake shape sitting near it). Not yet built; would need an
+   LLM call given the label text + a nearby crop, asked only "is there
+   likely a checkbox near here, and roughly where" — its answer becomes
+   another hint fed into the same accept/reject local-repair logic #7
+   already has, not a trusted final answer.
+3. **#1's remaining instance** (`[1098,491,1122,515]`) — Textract's own
+   FORMS model doesn't resolve a checkbox there either, so #7 can't help;
+   would need the fundamentally different technique (edge/gradient
+   detection, or morphological gap-bridging) this issue always needed.
+   Lowest priority, only 1 instance left.
+4. **Documentation debt from #9** — the README's "fusion, not
+   fragmentation" explanation of the No Zoning case is now doubly stale
+   (the box is fixed, not just re-diagnosed); still needs a pass.
 
 Every fix here should follow the project's established pattern: reproduce
 concretely (pixel data or a synthetic case, not assertion), fix, add a

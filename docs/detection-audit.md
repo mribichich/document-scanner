@@ -30,9 +30,16 @@ review of every checkbox on every page:
   row below. `docs/chatgpt.json` (123 boxes) was also checked as a
   possible second cross-check source and ruled out — its coordinates
   don't align to any of our samples at any tested scale factor.
-  `appraisal-3/4` have not had either a second cross-check or a manual
-  review yet — either could surface more misses, the way both did for
-  appraisal-2.
+- All 4 samples are now also cross-checked, every `/detect` call, against
+  live Textract FORMS analysis (issue #7's gap-recovery pass) — this
+  surfaces any label Textract associates with a checkbox that our own
+  pixel pass missed, and folds the recoverable ones straight into the
+  result rather than just reporting them here. appraisal-1/3/4 show 0
+  such gaps as of 2026-08-17 (consistent with, but not the same
+  guarantee as, a manual review — it only catches misses Textract's own
+  form model also happens to resolve a checkbox for).
+  `appraisal-3/4` have not had a manual source-image review yet — that
+  could still surface more misses, the way it did for appraisal-2.
 - No sample has had a full manual box-by-box review **against the source
   image** other than appraisal-2. **Absence from this list means "not yet
   found," not "confirmed correct."**
@@ -51,10 +58,10 @@ review of every checkbox on every page:
 
 | bbox | Problem | Status | Issue |
 |---|---|---|---|
-| `[281,187,307,210]` ("Neighborhood Boundaries") | Candidate detection miss — border ~gray 223, faint on all 4 sides | **Open** — no threshold parameter recovers it; needs a different technique. Independently reconfirmed by direct user inspection 2026-08-17 | [#1](algorithm-known-issues.md#1-global-binary-threshold-misses-faintlight-gray-checkbox-borders) |
-| `[1098,491,1122,515]` | Candidate detection miss, same cause | **Open** | #1 |
-| `~[715,490,738,514]` ("No Zoning") | Candidate detection miss — the project's original motivating case (scratch line through the box). Failure mode changed under adaptive thresholding: border fragments into 3-6-sided undersized shards (confirmed via raw binary mask), not the old single-oversized-blob fusion the README still describes | **Open** — 2 fix attempts (morphological closing, kernel 2/3) rejected, too destructive image-wide (~41→24-26 candidates lost everywhere) | [#9](algorithm-known-issues.md#9-no-zoning-scratch-line-box-still-not-detected-failure-mode-changed) |
-| `~[196,613,220,637]` ("Electricity" / "Public") | Candidate detection miss — border intact but an unusual radiating "burst" mark pattern touches it on all 4 sides, merging into one 8-corner, extent-0.214 blob | **Open** — 1 fix attempt (erosion, kernel 2/3) rejected, too destructive image-wide (~41→0-4 candidates) | [#10](algorithm-known-issues.md#10-checkbox-border-obscured-on-all-sides-by-an-unusual-burst-mark-pattern) |
+| `[281,187,307,210]` ("Neighborhood Boundaries") | Candidate detection miss — border ~gray 223, faint on all 4 sides | **Fixed** 2026-08-17 — Textract-hint gap recovery (#7); recovered at `[282,185,305,207]`, correctly unchecked, IoU 0.88 vs this estimate | [#1](algorithm-known-issues.md#1-global-binary-threshold-misses-faintlight-gray-checkbox-borders) |
+| `[1098,491,1122,515]` | Candidate detection miss, same cause | **Open** — checked live 2026-08-17: Textract's own FORMS model has no resolved checkbox anywhere near here either, so #7 can't recover it; still needs a different technique | #1 |
+| `~[715,490,738,514]` ("No Zoning") | Candidate detection miss — the project's original motivating case (scratch line through the box). Failure mode changed under adaptive thresholding: border fragments into 3-6-sided undersized shards (confirmed via raw binary mask), not the old single-oversized-blob fusion the README still describes | **Fixed** 2026-08-17 — Textract-hint gap recovery (#7), after 4 rejected pixel-only attempts; recovered at `[712,491,735,514]`, correctly unchecked despite the scratch, IoU 0.88 vs this estimate | [#9](algorithm-known-issues.md#9-no-zoning-scratch-line-box-still-not-detected-failure-mode-changed) |
+| `~[196,613,220,637]` ("Electricity" / "Public") | Candidate detection miss — border intact but an unusual radiating "burst" mark pattern touches it on all 4 sides, merging into one 8-corner, extent-0.214 blob | **Fixed** 2026-08-17 — Textract-hint gap recovery (#7); recovered at `[195,612,218,634]`, correctly unchecked, IoU 0.84 vs this estimate | [#10](algorithm-known-issues.md#10-checkbox-border-obscured-on-all-sides-by-an-unusual-burst-mark-pattern) |
 | `[809,613,838,636]` (near "Other (describe)") | False positive — a hand-drawn shape (not a real printed checkbox) whose outer silhouette happened to pass every geometric filter; previously misdescribed in this project's own Task 17 notes as "a real, unambiguous hand-drawn check mark" — it is not a real form checkbox at all, confirmed by the project owner | **Fixed** 2026-08-17 — rectangularity check (side-length ratio + corner-angle deviation) | [#8](algorithm-known-issues.md#8-hand-drawn-shapes-can-mimic-a-checkboxs-4-corner-correct-extent-silhouette) |
 
 ## appraisal-3.png (2550x4200)

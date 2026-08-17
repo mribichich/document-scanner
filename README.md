@@ -399,7 +399,7 @@ your own AWS account ID once the role exists
 
 ## Testing
 
-### Local CV development loop (no AWS required)
+### Local CV development loop
 
 The fastest way to iterate on the CV algorithm itself is `cli.py`, which
 runs `detect_cv.py` directly against local files — no Lambda, no API
@@ -410,6 +410,16 @@ cd lambda/detect-cv
 python3 -m venv venv && venv/bin/pip install -r requirements-dev.txt   # one-time, see Prerequisites
 venv/bin/python3 cli.py <image_or_folder>
 ```
+
+**Needs AWS credentials with `textract:AnalyzeDocument`** (e.g.
+`AWS_PROFILE=document-scanner`) since `detect_checkboxes` also calls
+Textract's FORMS analysis for gap-recovery hints (see
+`docs/algorithm-known-issues.md` issue #7, `textract_hints.py`) — this is
+the one part of the CV pipeline that isn't purely local. It fails open:
+missing/expired credentials just mean the run falls back to CV-only
+results (logged, not raised), so `cli.py` still works without AWS
+configured, just without the Textract-recovered boxes. The pytest suite
+below does **not** need AWS credentials — it stubs this call out.
 
 For each image, it writes into a timestamped `results/cv/<timestamp>/`
 subfolder alongside the input, so every run is kept separate from the last:
@@ -558,7 +568,7 @@ numbers only change if `detect_cv.py`'s constants are recalibrated):
 | Sample            | Boxes detected | Checked | Unchecked |
 | ------------------ | -------------- | ------- | --------- |
 | appraisal-1.png    | 118            | 37      | 81        |
-| appraisal-2.png    | 40             | 16      | 24        |
+| appraisal-2.png    | 43             | 16      | 27        |
 | appraisal-3.png    | 48             | 12      | 36        |
 | appraisal-4.png    | 79             | 28      | 51        |
 
@@ -624,15 +634,17 @@ already in that folder.
 
 On the last verified visual review of the CV pipeline (same bar as the
 original Textract review — eyeball every box against the source image):
-one of the two concrete failure cases that motivated building the CV
-pipeline is fixed, and the other has changed shape rather than
-disappeared — see "appraisal-2.png scratch line: missed detection, not a
-correct classification" under "Next steps" for the detail. On
-`appraisal-4.png`, the "Utilities" checkbox grid (Electricity/Gas/Water/Sanitary
-Sewer) that Textract dropped entirely under a diagonal watermark is now
-fully detected, with each box correctly classified. Overall box placement
-is tight and classification matches the visible marks on both reviewed
-pages.
+both of the two concrete failure cases that motivated building the CV
+pipeline are now fixed. The "appraisal-2.png scratch line" case (see
+"Next steps" for the detail) took a second mechanism to actually close —
+pixel/geometry fixes alone changed its failure mode but never recovered
+it; it's fixed now via Textract-hint gap recovery (issue #7), a
+label-awareness pass layered on top of the pixel pipeline, not a further
+pixel tweak. On `appraisal-4.png`, the "Utilities" checkbox grid
+(Electricity/Gas/Water/Sanitary Sewer) that Textract dropped entirely
+under a diagonal watermark is fully detected, with each box correctly
+classified. Overall box placement is tight and classification matches the
+visible marks on both reviewed pages.
 
 A previously-documented gap on `appraisal-1.png` (118 detected against an
 estimate of ~125 expected, from an unverified prior manual analysis) was
@@ -678,34 +690,51 @@ in it — `force_delete = true` on `aws_ecr_repository.detect_cv` so
 Both detection implementations are wired in, deployed behind the same API
 Gateway, and validated against all 4 sample images, including a visual
 accuracy review of each (see "Visualizing detections" above). The CV
-pipeline fixes one of the two concrete Textract failure cases that
-motivated building it (the appraisal-4 watermarked Utilities-grid false
-negatives); the appraisal-2 scratch-line case is not fixed so much as
-changed into a different defect — see the first item below. Remaining
-ideas, roughly in priority order:
+pipeline fixes both of the two concrete Textract failure cases that
+motivated building it — including the appraisal-2 scratch-line case,
+which took a second, different mechanism (Textract-hint gap recovery, not
+another pixel/geometry fix) to actually close; see the first item below
+for what that took. Remaining ideas, roughly in priority order:
 
-- **appraisal-2.png scratch line: missed detection, not a correct
-  classification.** The original Textract failure was a false positive:
-  the stray diagonal scratch line crossing the "No Zoning" checkbox (around
-  x=718, y=503 in the 1586x846 image) made Textract read it as
-  `is_checked: true`. The CV pipeline does *not* fix this by correctly
-  recognizing the mark as unrelated to the box and classifying it
-  red/unchecked — verified directly, that box does not appear in
-  `detect_checkboxes`'s output at all. Under the current adaptive
-  threshold, the failure mechanism is fragmentation, not fusion: the
-  scratch line does fuse part of the box's border into one large
-  (~859x31px) contour with itself, but a genuine portion of the border is
-  also entirely absent from the binary mask, so what's left doesn't
-  reconstruct into a valid rectangle either way — the box simply isn't
-  detected. Three structurally different fix attempts have been tried and
-  rejected on concrete evidence: morphological closing (too destructive
-  image-wide), erosion (same), and a Hough-line-based rectangle
-  reconstruction tolerant of partial occlusion (recovers this specific box
-  but produces hundreds of spurious candidates elsewhere from ordinary
-  ruled-table gridlines). See `docs/algorithm-known-issues.md` issue #9
-  for the full evidence and rejected-attempt detail; this is a missed
-  checkbox (false negative), a different defect than the false positive it
-  replaced, not an absence of one.
+- **Context/label-aware gap recovery (issue #7): built, level 2 only.**
+  The CV pipeline now calls Textract's FORMS analysis (`textract_hints.py`)
+  purely for label→checkbox location hints — never for its own
+  checked/unchecked call, which has the exact false-positive failure mode
+  (a stray mark crossing a border reads as "selected") that motivated this
+  whole CV pivot. `find_missing_boxes()` diffs those hints against the CV
+  pipeline's own candidates and does a small, scoped local search at any
+  gap — this is what finally closed the appraisal-2 scratch-line case
+  (below), plus two other previously-open misses on the same page (a
+  faint border, and a checkbox obscured by an unusual mark pattern — see
+  `docs/algorithm-known-issues.md` issues #1/#9/#10). Not built: an LLM
+  fallback for a label Textract's own form model never resolves a
+  checkbox for at all (hit in live data — "Other (describe)" on
+  appraisal-2), and level 1 (flagging a detected box with no nearby label
+  as a likely false positive) — checked live and explicitly *not*
+  pursued, since Textract's own checkbox recognition misses 20 of the CV
+  pipeline's 118 correctly-detected boxes on appraisal-1 alone; using that
+  as a removal signal would delete real boxes.
+- **appraisal-2.png scratch line: now fixed, via label awareness rather
+  than a pixel/geometry technique.** The original Textract failure was a
+  false positive: the stray diagonal scratch line crossing the "No
+  Zoning" checkbox (around x=718, y=503 in the 1586x846 image) made
+  Textract read it as `is_checked: true`. Getting the CV pipeline to
+  correctly recognize the mark as unrelated and classify red/unchecked
+  turned out to need two separate fixes: first, the box had to be
+  *detected* at all — verified directly, it never appeared in
+  `detect_checkboxes`'s output prior to issue #7, regardless of four
+  structurally different pixel/geometry attempts (morphological closing,
+  a Hough-line rectangle reconstruction tolerant of partial occlusion,
+  diagonal-stroke removal in 3 filter variants, and a fragment-clustering
+  local-search scope — all tried and rejected on concrete evidence, see
+  `docs/algorithm-known-issues.md` issue #9 for the full detail). What
+  actually closed it: Textract's own FORMS analysis already resolves a
+  checkbox for the "No Zoning" label, precisely, even though its own
+  checked/unchecked call for that same box is wrong for the reason above
+  — issue #7 uses only the location, then classifies with the CV
+  pipeline's own (already correct) logic. Live-validated: recovered with
+  the correct `is_checked: false`, despite the scratch line running
+  straight through it.
 - **Document-size / DPI generalization:** the CV pipeline's tunable
   constants (`MIN_BOX_SIZE`, `MAX_BOX_SIZE`, `MIN_EXTENT_RATIO`, etc., all
   at the top of `lambda/detect-cv/detect_cv.py`) are calibrated in pixels
@@ -734,10 +763,12 @@ ideas, roughly in priority order:
   `test_checked_when_border_fused_with_gridline_and_mark_is_separate` and
   `test_checked_when_mark_touches_border_that_is_also_fused_with_gridline`).
   The appraisal-2 scratch-line case turned out not to be a containment-check
-  problem at all — see "appraisal-2.png scratch line" above; that mark
-  never reaches classification in the first place. Revisit the Hough-line
-  fallback if a document with a harder version of the "unrelated mark near
-  a checkbox" problem is encountered. **Specific, currently-untested
+  problem at all — see "appraisal-2.png scratch line" above; the mark
+  simply never reached classification in the first place (the box itself
+  wasn't detected), and once issue #7 recovers the box, this same
+  containment check classifies it correctly with no changes needed.
+  Revisit the Hough-line fallback if a document with a harder version of
+  the "unrelated mark near a checkbox" problem is encountered. **Specific, currently-untested
   gap** (found via an audit against `docs/chatgpt.md`): `is_checked()`
   requires ink coverage above a threshold and that enough of the touching
   ink's connected component falls within the box's own bounds

@@ -1,7 +1,10 @@
+import logging
 import math
 
 import cv2
 import numpy as np
+
+import textract_hints
 
 MIN_BOX_SIZE = 22
 MAX_BOX_SIZE = 60
@@ -372,6 +375,222 @@ def is_checked(binary_full: np.ndarray, box: tuple[int, int, int, int]) -> bool:
     return _mark_is_contained(binary_full, box)
 
 
+# Textract's own FORMS analysis associates labels with checkboxes far more
+# precisely than any pixel heuristic could ("No Zoning" -> that exact box),
+# but its geometry is still just a hint, not a trusted answer: a hint is
+# only ever used to look closer at a location the pixel pass already missed
+# entirely, never to override or remove something already found. See
+# docs/algorithm-known-issues.md issue #7 and textract_hints.py.
+#
+# HINT_SEARCH_PADDING sizes the local window searched around a hint - big
+# enough to catch a checkbox whose Textract-reported position is off by a
+# few px, small enough that this stays a scoped, low-risk local search
+# rather than reintroducing the page-wide false-positive problem that
+# rejected every earlier attempt at issue #9 this session (see that
+# issue's "attempted and rejected" history for why page-wide search on
+# this document family doesn't work).
+HINT_SEARCH_PADDING = 15
+HINT_COVERED_IOU_THRESHOLD = 0.3
+# Looser than the main pipeline's own MIN_BOX_SIZE/MAX_BOX_SIZE/aspect
+# bounds: Textract's geometry is independently measured, not derived from
+# our own contours, so it carries its own small margin of error - but
+# still tight enough to reject an implausible shape outright (e.g. the
+# known fake hand-drawn shape's Textract-reported box, aspect 1.59,
+# already falls outside this band before any pixel analysis runs).
+HINT_SIZE_TOLERANCE_FACTOR = 1.3
+HINT_ASPECT_TOLERANCE_FACTOR = 1.2
+LOCAL_STROKE_ANGLE_TOLERANCE_DEGREES = 15.0
+LOCAL_STROKE_MIN_LENGTH = 15
+LOCAL_STROKE_ERASE_THICKNESS = 4
+
+
+def _hint_bbox_plausible(bbox: tuple[int, int, int, int]) -> bool:
+    x1, y1, x2, y2 = bbox
+    w, h = x2 - x1, y2 - y1
+    if w <= 0 or h <= 0:
+        return False
+    min_size = MIN_BOX_SIZE / HINT_SIZE_TOLERANCE_FACTOR
+    max_size = MAX_BOX_SIZE * HINT_SIZE_TOLERANCE_FACTOR
+    if not (min_size <= w <= max_size and min_size <= h <= max_size):
+        return False
+    aspect_ratio = w / h
+    min_aspect = ASPECT_RATIO_MIN / HINT_ASPECT_TOLERANCE_FACTOR
+    max_aspect = ASPECT_RATIO_MAX * HINT_ASPECT_TOLERANCE_FACTOR
+    return min_aspect <= aspect_ratio <= max_aspect
+
+
+def _local_shape_verdict(
+    crop: np.ndarray,
+) -> tuple[str, tuple[int, int, int, int] | None]:
+    """Look for a checkbox-shaped contour within a small local crop.
+
+    Returns ("accept", bbox) if a valid rectangle is found (crop-local
+    coordinates); ("reject", None) if a checkbox-scale, 4-corner contour
+    exists but explicitly fails rectangularity (the hand-drawn-shape
+    signature from issue #8 - strong evidence this location should NOT
+    become a candidate); or ("no_shape", None) if nothing checkbox-scale
+    with 4 corners is present at all. "no_shape" is absence of evidence,
+    not evidence of absence: the only reason this crop is being examined
+    is that a real label pointed here.
+    """
+    contours, _ = cv2.findContours(crop, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    saw_4corner_candidate = False
+    for contour in contours:
+        x, y, w, h = cv2.boundingRect(contour)
+        if w == 0 or h == 0:
+            continue
+        min_size = MIN_BOX_SIZE / HINT_SIZE_TOLERANCE_FACTOR
+        max_size = MAX_BOX_SIZE * HINT_SIZE_TOLERANCE_FACTOR
+        if not (min_size <= w <= max_size and min_size <= h <= max_size):
+            continue
+        perimeter = cv2.arcLength(contour, True)
+        approx = cv2.approxPolyDP(contour, CORNER_EPSILON_FACTOR * perimeter, True)
+        if len(approx) != 4:
+            continue
+        saw_4corner_candidate = True
+        if not _is_rectangular(approx):
+            continue
+        extent = cv2.contourArea(contour) / (w * h) if w * h else 0.0
+        if extent < MIN_EXTENT_RATIO:
+            continue
+        return "accept", (x, y, w, h)
+    if saw_4corner_candidate:
+        return "reject", None
+    return "no_shape", None
+
+
+def _erase_local_diagonal_strokes(crop: np.ndarray) -> np.ndarray:
+    """Erase long diagonal strokes within a small local crop.
+
+    The same idea tried page-wide for issue #9 (real form structure is
+    only ever horizontal/vertical, so a diagonal stroke is never part of
+    the printed form) - rejected at page scale because dense text and
+    evenly-spaced real check marks produce too many coincidental diagonal
+    alignments to safely filter (see that issue's "attempted and
+    rejected" history). At the scale of a single hint's search window,
+    that noise source isn't present, so the same technique is safe here.
+    """
+    lines = cv2.HoughLinesP(
+        crop, 1, np.pi / 360, threshold=10,
+        minLineLength=LOCAL_STROKE_MIN_LENGTH, maxLineGap=4,
+    )
+    if lines is None:
+        return crop
+
+    cleaned = crop.copy()
+    for x1, y1, x2, y2 in lines.reshape(-1, 4):
+        angle = math.degrees(math.atan2(y2 - y1, x2 - x1)) % 180
+        is_diagonal = not (
+            angle < LOCAL_STROKE_ANGLE_TOLERANCE_DEGREES
+            or angle > 180 - LOCAL_STROKE_ANGLE_TOLERANCE_DEGREES
+            or abs(angle - 90) < LOCAL_STROKE_ANGLE_TOLERANCE_DEGREES
+        )
+        if is_diagonal:
+            cv2.line(cleaned, (x1, y1), (x2, y2), 0, LOCAL_STROKE_ERASE_THICKNESS)
+    return cleaned
+
+
+def _recover_hint_candidate(
+    binary_full: np.ndarray, hint_bbox: tuple[int, int, int, int]
+) -> tuple[int, int, int, int] | None:
+    x1, y1, x2, y2 = hint_bbox
+    img_h, img_w = binary_full.shape
+    rx1 = max(0, x1 - HINT_SEARCH_PADDING)
+    ry1 = max(0, y1 - HINT_SEARCH_PADDING)
+    rx2 = min(img_w, x2 + HINT_SEARCH_PADDING)
+    ry2 = min(img_h, y2 + HINT_SEARCH_PADDING)
+    if rx2 <= rx1 or ry2 <= ry1:
+        return None
+
+    crop = binary_full[ry1:ry2, rx1:rx2]
+
+    # A "reject" verdict is only trusted as genuine evidence when it comes
+    # from the untouched crop (a real hand-drawn shape actually sitting
+    # there, e.g. the fake "Public"/"Other (describe)" blob from issue #8).
+    # A "reject" that only appears AFTER our own diagonal-stroke erasure
+    # is not independent evidence - erasure is a repair attempt, and can
+    # itself damage a genuine (if diagonal-fused) border into something
+    # that fails rectangularity, which is exactly what happened on the
+    # real "No Zoning" box: the untouched crop shows an intact border
+    # fused with the scratch into a many-cornered blob ("no_shape", since
+    # it doesn't cleanly parse as 4 corners either way), but erasing the
+    # diagonal also ate into the top-left corner, turning it into a
+    # broken 4-corner shape that then fails rectangularity. Letting that
+    # erasure-caused rejection block acceptance would silently reintroduce
+    # this exact miss. So only the raw crop's reject is a hard stop; a
+    # post-erasure reject just means the repair didn't help, not that the
+    # location is bad.
+    verdict, bbox = _local_shape_verdict(crop)
+    if verdict == "accept":
+        cx, cy, cw, ch = bbox
+        return (cx + rx1, cy + ry1, cw, ch)
+    if verdict == "reject":
+        return None
+
+    cleaned = _erase_local_diagonal_strokes(crop)
+    verdict, bbox = _local_shape_verdict(cleaned)
+    if verdict == "accept":
+        cx, cy, cw, ch = bbox
+        return (cx + rx1, cy + ry1, cw, ch)
+
+    # Nothing found even after local repair, and the untouched crop never
+    # produced an explicit reject either - a real label pointed here (e.g.
+    # a border too faint to form a closed contour at all - "Neighborhood
+    # Boundaries", or one fused into a many-cornered blob by a stray mark
+    # - "No Zoning"). Trust Textract's own geometry as a last resort.
+    w, h = x2 - x1, y2 - y1
+    if w <= 0 or h <= 0:
+        return None
+    return (x1, y1, w, h)
+
+
+def find_missing_boxes(
+    binary_full: np.ndarray,
+    existing_candidates: list[tuple[int, int, int, int]],
+    hints: list[textract_hints.Hint],
+) -> list[tuple[int, int, int, int]]:
+    new_candidates = []
+    for hint in hints:
+        if hint.bbox is None:
+            # Textract's own form model didn't resolve a checkbox for this
+            # label at all - no fallback for this case yet (would need an
+            # LLM or similar reasoning step; see algorithm-known-issues.md
+            # issue #7).
+            continue
+        if not _hint_bbox_plausible(hint.bbox):
+            continue
+        hx1, hy1, hx2, hy2 = hint.bbox
+        hint_xywh = (hx1, hy1, hx2 - hx1, hy2 - hy1)
+        if any(_iou(hint_xywh, e) > HINT_COVERED_IOU_THRESHOLD for e in existing_candidates):
+            continue
+        recovered = _recover_hint_candidate(binary_full, hint.bbox)
+        if recovered is not None:
+            new_candidates.append(recovered)
+    return new_candidates
+
+
+def _get_textract_hints(
+    image_bytes: bytes, width: int, height: int
+) -> list[textract_hints.Hint]:
+    """Best-effort: Textract is a pure enhancement here, never a
+    requirement. This pass can only add candidates the pixel pipeline
+    already missed, so any failure (network, throttling, credentials, an
+    unparseable response) should fall back to CV-only results rather than
+    breaking the endpoint - losing a few recoverable boxes is a much
+    smaller failure than a 500.
+    """
+    try:
+        response = textract_hints.analyze_forms(image_bytes)
+    except Exception:
+        logging.exception("Textract FORMS analysis failed; continuing with CV-only detection")
+        return []
+    try:
+        return textract_hints.extract_checkbox_hints(response, width, height)
+    except Exception:
+        logging.exception("failed to parse Textract FORMS response; continuing with CV-only detection")
+        return []
+
+
 def decode_image(image_bytes: bytes) -> np.ndarray:
     if len(image_bytes) > MAX_INPUT_BYTES:
         raise ValueError("image too large")
@@ -414,12 +633,19 @@ def detect_checkboxes(image_bytes: bytes) -> list[dict]:
 
     candidates = find_checkbox_candidates(gray)
     candidates = deduplicate_boxes(candidates)
-    candidates = _sort_reading_order(candidates)
 
     # Computed once and reused for every box's classification below, rather
     # than re-running adaptiveThreshold per box (it's a full-image op; with
     # ~100+ candidates per page, recomputing it per box would be wasteful).
     binary_full = _adaptive_binary(gray)
+
+    hints = _get_textract_hints(image_bytes, gray.shape[1], gray.shape[0])
+    if hints:
+        missing = find_missing_boxes(binary_full, candidates, hints)
+        if missing:
+            candidates = deduplicate_boxes(candidates + missing)
+
+    candidates = _sort_reading_order(candidates)
 
     boxes = []
     for (x, y, w, h) in candidates:

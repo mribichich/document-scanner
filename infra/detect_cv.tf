@@ -11,6 +11,7 @@ resource "null_resource" "build_and_push_detect_cv_image" {
     source_hash = sha256(join("", [
       filesha256("${path.module}/../lambda/detect-cv/detect_cv.py"),
       filesha256("${path.module}/../lambda/detect-cv/handler.py"),
+      filesha256("${path.module}/../lambda/detect-cv/textract_hints.py"),
       filesha256("${path.module}/../lambda/detect-cv/requirements.txt"),
       filesha256("${path.module}/../lambda/detect-cv/Dockerfile"),
     ]))
@@ -51,6 +52,25 @@ resource "aws_iam_role" "detect_cv_exec" {
 resource "aws_iam_role_policy_attachment" "detect_cv_basic_execution" {
   role       = aws_iam_role.detect_cv_exec.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+# Textract FORMS analysis feeds label-position hints into gap recovery
+# (docs/algorithm-known-issues.md issue #7) - a pure enhancement over the
+# CV pipeline's own detection, never a requirement (detect_cv.py fails
+# open to CV-only results if this call fails for any reason).
+resource "aws_iam_role_policy" "detect_cv_textract" {
+  name = "${local.name_prefix}-detect-cv-textract"
+  role = aws_iam_role.detect_cv_exec.id
+
+  # Textract API actions don't support resource-level ARNs; "*" is required.
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["textract:AnalyzeDocument"]
+      Resource = "*"
+    }]
+  })
 }
 
 resource "aws_cloudwatch_log_group" "detect_cv_lambda" {

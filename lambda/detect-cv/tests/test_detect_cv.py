@@ -227,7 +227,13 @@ import pytest
 from detect_cv import detect_checkboxes
 
 
-def test_detect_checkboxes_end_to_end():
+def test_detect_checkboxes_end_to_end(monkeypatch):
+    # detect_checkboxes also calls out to Textract for gap-recovery hints
+    # (see textract_hints.py) - stubbed here to keep this test offline and
+    # deterministic, and because this test's synthetic image has nothing
+    # for Textract's FORMS analysis to find labels in anyway.
+    monkeypatch.setattr("detect_cv._get_textract_hints", lambda *a, **k: [])
+
     gray = make_blank_gray(300, 300)
     cv2.rectangle(gray, (50, 50), (70, 70), color=0, thickness=2)  # unchecked, near top
     cv2.rectangle(gray, (50, 150), (70, 170), color=0, thickness=2)  # checked, below it
@@ -360,3 +366,95 @@ def test_decode_image_falls_back_to_byte_cap_for_unrecognized_format():
     # unparseable header as itself an error.
     with pytest.raises(ValueError):
         detect_cv.decode_image(b"not an image and not a recognized header")
+
+
+# --- Textract hint-driven gap recovery (issue #7) --------------------------
+#
+# These exercise find_missing_boxes() directly against synthetic images and
+# hand-built Hint objects, independent of any live Textract call — the
+# accept/reject/skip logic is what's under test here, not Textract's own
+# analysis. See textract_hints.py for the Hint parsing tests, and the
+# 2026-08-17 session notes for how this exact logic was validated against
+# live Textract output on all 4 real samples before being written.
+
+from textract_hints import Hint
+
+from detect_cv import find_missing_boxes, _hint_bbox_plausible
+
+
+def test_recovers_a_box_the_global_pipeline_misses_via_a_hint():
+    # A long diagonal stroke fuses with the box border into one oversized,
+    # non-4-corner contour — same failure mode as the real "No Zoning"
+    # scratch line. find_checkbox_candidates() misses it entirely (the
+    # fused contour fails the size/corner-count filters), but a hint
+    # pointing at the box's own location recovers it.
+    gray = make_blank_gray(150, 150)
+    cv2.rectangle(gray, (50, 50), (74, 74), color=0, thickness=2)
+    cv2.line(gray, (10, 65), (130, 45), color=0, thickness=2)
+
+    existing = find_checkbox_candidates(gray)
+    assert existing == []  # confirms the global pipeline genuinely misses this
+
+    binary_full = detect_cv._adaptive_binary(gray)
+    hints = [Hint(label="Test Label", bbox=(50, 50, 74, 74))]
+
+    recovered = find_missing_boxes(binary_full, existing, hints)
+
+    assert len(recovered) == 1
+    x, y, w, h = recovered[0]
+    assert abs(x - 50) <= 8 and abs(y - 50) <= 8
+    assert 15 <= w <= 28 and 15 <= h <= 28
+
+
+def test_rejects_hint_pointing_at_a_hand_drawn_non_rectangular_shape():
+    # Same fake-shape signature as issue #8 (skewed quadrilateral, not a
+    # real printed checkbox). A hint must never blindly trust Textract's
+    # own bounding box — it has to fail the same rectangularity check a
+    # normal candidate would, exactly what actually happened with the real
+    # "Public" mislabel Textract produced for this same fake shape on
+    # appraisal-2.
+    gray = make_blank_gray(150, 150)
+    pts = np.array([[50, 51], [51, 72], [78, 69], [76, 53]])
+    cv2.polylines(gray, [pts], isClosed=True, color=0, thickness=3)
+
+    binary_full = detect_cv._adaptive_binary(gray)
+    hints = [Hint(label="Other (describe)", bbox=(50, 51, 78, 72))]
+
+    assert find_missing_boxes(binary_full, [], hints) == []
+
+
+def test_skips_hint_already_covered_by_an_existing_candidate():
+    gray = make_blank_gray(150, 150)
+    cv2.rectangle(gray, (50, 50), (74, 74), color=0, thickness=2)
+
+    binary_full = detect_cv._adaptive_binary(gray)
+    existing = [(48, 48, 28, 28)]
+    hints = [Hint(label="Already Found", bbox=(50, 50, 74, 74))]
+
+    assert find_missing_boxes(binary_full, existing, hints) == []
+
+
+def test_accepts_a_hint_over_blank_space_as_a_last_resort():
+    # No contour at all forms (e.g. a border too faint to register, like
+    # the real "Neighborhood Boundaries" case) — nothing explicitly
+    # rejects this location, and a real label pointed here, so Textract's
+    # own geometry is trusted as a last resort. Documents this trade-off
+    # deliberately rather than leaving it as an accidental gap.
+    gray = make_blank_gray(150, 150)
+    binary_full = detect_cv._adaptive_binary(gray)
+    hints = [Hint(label="Blank", bbox=(50, 50, 73, 72))]
+
+    recovered = find_missing_boxes(binary_full, [], hints)
+
+    assert recovered == [(50, 50, 23, 22)]
+
+
+def test_hint_bbox_plausible_rejects_implausible_aspect_ratio():
+    # The real fake hand-drawn shape's Textract-reported box (27x17,
+    # aspect 1.59) — should be rejected by this cheap pre-filter before
+    # any pixel analysis runs at all.
+    assert _hint_bbox_plausible((808, 614, 835, 631)) is False
+
+
+def test_hint_bbox_plausible_accepts_normal_checkbox_size():
+    assert _hint_bbox_plausible((713, 492, 736, 514)) is True
