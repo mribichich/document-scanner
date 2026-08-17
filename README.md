@@ -168,15 +168,42 @@ aws iam attach-user-policy \
 
 # The actual deploy permissions (Lambda, API Gateway, IAM role for the
 # Lambda's own execution role, CloudWatch Logs, Textract, ECR for the
-# Lambda's container image)
-aws iam put-user-policy \
-  --user-name document-scanner-deployer \
+# Lambda's container image) - a customer-managed policy, not inline:
+# AWS caps inline IAM user policies at 2048 bytes, too small for this
+# policy's fully-enumerated action lists once ECR grew past a handful of
+# actions (confirmed live, not theoretical - a real LimitExceeded error).
+# Managed policies cap at 6144 bytes, comfortable headroom.
+aws iam create-policy \
   --policy-name document-scanner-deploy \
   --policy-document file://infra/bootstrap-iam-policy.json
+
+aws iam attach-user-policy \
+  --user-name document-scanner-deployer \
+  --policy-arn arn:aws:iam::<your-account-id>:policy/document-scanner-deploy
 ```
 
 This is the *only* step here that needs root/admin credentials. Everything
 below runs as `document-scanner-deployer`.
+
+**Updating this policy later** (e.g. adding a new permission) also needs
+root/admin, since the deployer can't grant itself new permissions by
+design:
+
+```bash
+# Managed policies keep up to 5 versions - delete the oldest first if
+# already at that cap (list-policy-versions to check).
+aws iam create-policy-version \
+  --policy-arn arn:aws:iam::<your-account-id>:policy/document-scanner-deploy \
+  --policy-document file://infra/bootstrap-iam-policy.json \
+  --set-as-default
+```
+
+The GitHub Actions deploy role's copy of this same policy (see "CI/CD"
+below) is attached as an inline role policy, not managed — inline *role*
+policies cap at 10,240 bytes, so there's no size pressure there, and it's
+Terraform-managed (`infra/github_oidc.tf` reads this same JSON file
+directly), updating automatically on every `terraform apply`. Only the
+human deployer's copy needs this manual step.
 
 **2. Sign in to the AWS Console as that user** (not root) at
 `https://<your-account-id>.signin.aws.amazon.com/console`, using the
@@ -235,7 +262,7 @@ entirely and use a static access key instead —
 put `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` wherever your CI stores
 secrets. The IAM user and policies from step 1 are the same either way.
 
-> **TODO:** this per-person IAM user + inline policy is a shortcut
+> **TODO:** this per-person IAM user + managed policy is a shortcut
 > acceptable for a single-developer/personal account. It does not scale
 > to a real team: every new developer would mean provisioning another
 > long-lived IAM user by hand. For a production account, replace this
@@ -246,22 +273,23 @@ secrets. The IAM user and policies from step 1 are the same either way.
 > credentials to create or rotate per person. CI/CD should similarly move
 > to an OIDC-federated role rather than a static access key.
 
-> **Related follow-up:** several statements in `infra/bootstrap-iam-policy.json`
-> (`EcrManageDetectRepo`, `LambdaManageFunction`, `IamPassAndManageLambdaExecRole`,
-> the merged S3/CloudWatch Logs statements) use a wildcarded action
-> (`"ecr:*"`, `"lambda:*"`, etc., each still scoped to just this project's
-> own resource ARN pattern, never account-wide) rather than an explicit
-> action list. That's a deliberate compromise, not an oversight, and it
-> got more aggressive over time under real pressure: AWS caps inline IAM
-> user policies at 2048 bytes, and adding `ecr:SetRepositoryPolicy` (etc.,
-> needed to fix the ECR-repository-policy issue below) pushed the
-> fully-enumerated version over that limit — confirmed live via a real
-> `LimitExceeded` error while trying to apply it, not a theoretical
-> concern. A cleaner fix is converting this whole file from an inline user
-> policy to a customer-managed policy (6144-byte limit, room for full
-> enumeration) — which is really the same underlying problem as the IAM
-> Identity Center TODO above: this bootstrap-deploy-user pattern is
-> already straining at its edges for a single-developer setup.
+> **Lesson from a real incident, not a hypothetical:** while fixing the
+> ECR-repository-policy gotcha below, the first attempt tried adding the
+> new `ecr:SetRepositoryPolicy` permission via `aws iam put-user-policy`
+> (an *inline* user policy) rather than checking that a managed policy
+> already existed. Inline user policies cap at 2048 bytes, too small for
+> this policy's fully-enumerated action lists — so the first fix attempt
+> wildcarded several statements (`"ecr:*"`, `"lambda:*"`, `"iam:*"`,
+> `"s3:*"`) to fit under that cap, a real, live-applied security
+> regression, not a proposal — an automated review of the commit caught it
+> before it reached `main`. Corrected by finding the pre-existing
+> customer-managed `document-scanner-deploy` policy (6144-byte limit, no
+> wildcards needed) that was already attached to the deployer, updating
+> *that* instead, and deleting the redundant inline policy the first
+> attempt had created alongside it. The bootstrap instructions above
+> reflect the corrected (managed-policy) setup. Worth remembering: a
+> byte-limit error is a signal to find the right mechanism, not a license
+> to broaden a grant to make it fit.
 
 > **Gotcha (confirmed live, cost ~30 minutes to diagnose):** after
 > renaming/recreating the Lambda's ECR repository (e.g. the `-cv` suffix
@@ -321,7 +349,7 @@ Docker must be running locally for this step (see "Docker" under
 Prerequisites). On success it prints `detect_endpoint`, the full URL of
 the deployed route.
 
-> **Gotcha:** right after creating/updating the IAM user's inline policy
+> **Gotcha:** right after creating/updating the IAM user's managed policy
 > (step 1 above), the very first `terraform apply` may fail with
 > `AccessDeniedException` on read-only calls (e.g.
 > `lambda:GetFunctionCodeSigningConfig`, `logs:DescribeLogGroups`) even

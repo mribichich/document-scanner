@@ -4,7 +4,18 @@
     {
       "Sid": "LambdaManageFunction",
       "Effect": "Allow",
-      "Action": "lambda:*",
+      "Action": [
+        "lambda:CreateFunction",
+        "lambda:DeleteFunction",
+        "lambda:UpdateFunctionCode",
+        "lambda:UpdateFunctionConfiguration",
+        "lambda:AddPermission",
+        "lambda:RemovePermission",
+        "lambda:TagResource",
+        "lambda:UntagResource",
+        "lambda:Get*",
+        "lambda:List*"
+      ],
       "Resource": "arn:aws:lambda:*:*:function:document-scanner-*"
     },
     {
@@ -21,7 +32,22 @@
     {
       "Sid": "IamPassAndManageLambdaExecRole",
       "Effect": "Allow",
-      "Action": "iam:*",
+      "Action": [
+        "iam:CreateRole",
+        "iam:DeleteRole",
+        "iam:GetRole",
+        "iam:PassRole",
+        "iam:AttachRolePolicy",
+        "iam:DetachRolePolicy",
+        "iam:ListAttachedRolePolicies",
+        "iam:ListRolePolicies",
+        "iam:GetRolePolicy",
+        "iam:PutRolePolicy",
+        "iam:DeleteRolePolicy",
+        "iam:ListInstanceProfilesForRole",
+        "iam:TagRole",
+        "iam:UntagRole"
+      ],
       "Resource": "arn:aws:iam::*:role/document-scanner-*"
     },
     {
@@ -33,11 +59,25 @@
     {
       "Sid": "CloudWatchLogsForLambda",
       "Effect": "Allow",
-      "Action": "logs:*",
-      "Resource": [
-        "arn:aws:logs:*:*:log-group:/aws/lambda/document-scanner-*",
-        "arn:aws:logs:*:*:log-group:/aws/lambda/document-scanner-*:*"
-      ]
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:DeleteLogGroup",
+        "logs:PutRetentionPolicy",
+        "logs:TagResource",
+        "logs:UntagResource",
+        "logs:ListTagsForResource"
+      ],
+      "Resource": "arn:aws:logs:*:*:log-group:/aws/lambda/document-scanner-*"
+    },
+    {
+      "Sid": "CloudWatchLogsReadForLambda",
+      "Effect": "Allow",
+      "Action": [
+        "logs:DescribeLogStreams",
+        "logs:GetLogEvents",
+        "logs:FilterLogEvents"
+      ],
+      "Resource": "arn:aws:logs:*:*:log-group:/aws/lambda/document-scanner-*:*"
     },
     {
       "Sid": "TextractTestingAccess",
@@ -57,7 +97,26 @@
     {
       "Sid": "EcrManageDetectRepo",
       "Effect": "Allow",
-      "Action": "ecr:*",
+      "Action": [
+        "ecr:CreateRepository",
+        "ecr:DeleteRepository",
+        "ecr:DescribeRepositories",
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:InitiateLayerUpload",
+        "ecr:UploadLayerPart",
+        "ecr:CompleteLayerUpload",
+        "ecr:PutImage",
+        "ecr:BatchGetImage",
+        "ecr:GetDownloadUrlForLayer",
+        "ecr:DescribeImages",
+        "ecr:ListImages",
+        "ecr:ListTagsForResource",
+        "ecr:TagResource",
+        "ecr:UntagResource",
+        "ecr:SetRepositoryPolicy",
+        "ecr:GetRepositoryPolicy",
+        "ecr:DeleteRepositoryPolicy"
+      ],
       "Resource": "arn:aws:ecr:*:*:repository/document-scanner-*"
     },
     {
@@ -75,9 +134,30 @@
       "Resource": "arn:aws:iam::*:oidc-provider/token.actions.githubusercontent.com"
     },
     {
-      "Sid": "TerraformStateBucketAndObjectAccess",
+      "Sid": "TerraformStateBucketManage",
       "Effect": "Allow",
-      "Action": "s3:*",
+      "Action": [
+        "s3:CreateBucket",
+        "s3:DeleteBucket",
+        "s3:PutBucketVersioning",
+        "s3:PutBucketPublicAccessBlock",
+        "s3:PutEncryptionConfiguration",
+        "s3:PutBucketPolicy",
+        "s3:PutBucketTagging",
+        "s3:PutLifecycleConfiguration",
+        "s3:Get*"
+      ],
+      "Resource": "arn:aws:s3:::document-scanner-terraform-state-*"
+    },
+    {
+      "Sid": "TerraformStateObjectAccess",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:DeleteObject",
+        "s3:ListBucket"
+      ],
       "Resource": [
         "arn:aws:s3:::document-scanner-terraform-state-*",
         "arn:aws:s3:::document-scanner-terraform-state-*/*"
