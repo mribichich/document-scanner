@@ -22,11 +22,19 @@ review of every checkbox on every page:
   independent source (`docs/chatgpt2.json`, a ChatGPT vision detection)
   and had a **direct manual review by the project owner** against the
   rendered source image (2026-08-17, 4 findings, 3 real + 1 confirmed
-  false positive — see its table below). `appraisal-1/3/4` have not had
-  either a second cross-check or a manual review yet — either could surface
-  more misses, the way both did for appraisal-2.
-- No sample other than appraisal-2 has had a full manual box-by-box review
-  against the source image. **Absence from this list means "not yet
+  false positive — see its table below).
+- `appraisal-1.png` has had one full manual visual audit of the rendered
+  `-annotated.png` output (2026-08-17, by the assistant, not the project
+  owner — a lower bar than a source-image review) confirming every visible
+  checkbox has a drawn box and no spurious boxes appear; see the closed #5
+  row below. `docs/chatgpt.json` (123 boxes) was also checked as a
+  possible second cross-check source and ruled out — its coordinates
+  don't align to any of our samples at any tested scale factor.
+  `appraisal-3/4` have not had either a second cross-check or a manual
+  review yet — either could surface more misses, the way both did for
+  appraisal-2.
+- No sample has had a full manual box-by-box review **against the source
+  image** other than appraisal-2. **Absence from this list means "not yet
   found," not "confirmed correct."**
 
 ## appraisal-1.png (2550x4200, target ~125 real checkboxes)
@@ -37,7 +45,7 @@ review of every checkbox on every page:
 | `[303,1354,359,1400]` | False negative (0.077) | **Fixed** 2026-08-16 | #3 |
 | `[346,2207,401,2252]` | False negative (0.075) | **Fixed** 2026-08-16 | #3 |
 | `[853,3108,909,3153]` | False negative (0.075) | **Fixed** 2026-08-16 | #3 |
-| ~7 boxes, location unknown | Candidate detection miss (118 found vs ~125 estimated) | **Open**, unexplained — re-checked after the #2 adaptive-threshold fix, count unaffected, so the README's original "gridline fusion" theory doesn't hold | [#5](algorithm-known-issues.md#5-appraisal-1-118-detected-boxes-vs-an-estimated-125) |
+| n/a | Suspected candidate detection miss (118 found vs ~125 estimated) | **Closed** 2026-08-17 — full manual visual audit of the entire page (all 6 sections) found 0 missing/spurious boxes; the "~125" figure has no verifiable source (checked and ruled out `docs/chatgpt.json` as its origin) and isn't ground truth | [#5](algorithm-known-issues.md#5-appraisal-1-118-detected-boxes-vs-an-estimated-125) |
 
 ## appraisal-2.png (1586x846)
 

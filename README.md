@@ -557,10 +557,10 @@ numbers only change if `detect_cv.py`'s constants are recalibrated):
 
 | Sample            | Boxes detected | Checked | Unchecked |
 | ------------------ | -------------- | ------- | --------- |
-| appraisal-1.png    | 118            | 33      | 85        |
-| appraisal-2.png    | 41             | 17      | 24        |
-| appraisal-3.png    | 30             | 8       | 22        |
-| appraisal-4.png    | 77             | 25      | 52        |
+| appraisal-1.png    | 118            | 37      | 81        |
+| appraisal-2.png    | 40             | 16      | 24        |
+| appraisal-3.png    | 48             | 12      | 36        |
+| appraisal-4.png    | 79             | 28      | 51        |
 
 **Textract pipeline** (`/detect-textract`, unchanged from the original
 implementation):
@@ -634,15 +634,17 @@ fully detected, with each box correctly classified. Overall box placement
 is tight and classification matches the visible marks on both reviewed
 pages.
 
-One known gap: on `appraisal-1.png`, calibration converged on 118
-detected boxes against an estimate of ~125 expected (per a similar prior
-manual analysis of that page). Investigation during calibration found no
-further adjustment to the existing tunable constants that closes this gap
-without also reintroducing other false positives/negatives — closing it
-fully would need an algorithmic addition (e.g. explicit suppression of
-table gridlines that coincidentally form checkbox-like shapes), which
-wasn't built speculatively. Documented here as a known, investigated gap,
-not a silently accepted one.
+A previously-documented gap on `appraisal-1.png` (118 detected against an
+estimate of ~125 expected, from an unverified prior manual analysis) was
+investigated further and closed 2026-08-17: a full manual visual audit of
+the entire rendered page found every checkbox correctly boxed and no
+spurious boxes, and the suspected source of the "~125" figure
+(`docs/chatgpt.json`) turned out not to be pixel-grounded to this image at
+any tested scale. 118 is very likely the correct count; see
+`docs/algorithm-known-issues.md` issue #5 for the full investigation.
+Ongoing algorithm work — root causes, evidence, and open items — is
+tracked in `docs/algorithm-known-issues.md` and `docs/detection-audit.md`,
+not here.
 
 ## Viewing logs
 
@@ -689,19 +691,21 @@ ideas, roughly in priority order:
   `is_checked: true`. The CV pipeline does *not* fix this by correctly
   recognizing the mark as unrelated to the box and classifying it
   red/unchecked — verified directly, that box does not appear in
-  `detect_checkboxes`'s output at all. What actually happens: during
-  candidate detection, the scratch line's ink is 8-connected to the
-  checkbox's own drawn border, so `cv2.findContours` returns one fused
-  contour for "border + scratch line" whose bounding box is roughly
-  859x31px (versus this document's ~24x24px checkboxes) — far outside
-  `MAX_BOX_SIZE`, so it's discarded before ever reaching classification.
-  The box simply isn't detected; this is a missed checkbox (false
-  negative), a different defect than the false positive it replaced, not
-  an absence of one. Fixing it would need candidate detection to be more
-  robust to a mark fusing with a box's border (e.g. morphological opening
-  to break thin connecting strokes before contour extraction) — not yet
-  built, tracked here as a known, verified gap rather than a silently
-  assumed fix.
+  `detect_checkboxes`'s output at all. Under the current adaptive
+  threshold, the failure mechanism is fragmentation, not fusion: the
+  scratch line does fuse part of the box's border into one large
+  (~859x31px) contour with itself, but a genuine portion of the border is
+  also entirely absent from the binary mask, so what's left doesn't
+  reconstruct into a valid rectangle either way — the box simply isn't
+  detected. Three structurally different fix attempts have been tried and
+  rejected on concrete evidence: morphological closing (too destructive
+  image-wide), erosion (same), and a Hough-line-based rectangle
+  reconstruction tolerant of partial occlusion (recovers this specific box
+  but produces hundreds of spurious candidates elsewhere from ordinary
+  ruled-table gridlines). See `docs/algorithm-known-issues.md` issue #9
+  for the full evidence and rejected-attempt detail; this is a missed
+  checkbox (false negative), a different defect than the false positive it
+  replaced, not an absence of one.
 - **Document-size / DPI generalization:** the CV pipeline's tunable
   constants (`MIN_BOX_SIZE`, `MAX_BOX_SIZE`, `MIN_EXTENT_RATIO`, etc., all
   at the top of `lambda/detect-cv/detect_cv.py`) are calibrated in pixels
@@ -715,11 +719,10 @@ ideas, roughly in priority order:
   size thresholds from the source image's resolution rather than
   hardcoded pixel counts), before trusting the CV pipeline on documents
   very different from the 4 samples.
-- **appraisal-1.png box count:** see "Visualizing detections" above —
-  calibration landed at 118 detected boxes against an estimated ~125
-  expected, with no further tunable-constant fix found; closing this gap
-  would need an algorithmic change (e.g. explicit table-gridline
-  suppression), tracked as a known gap rather than silently accepted.
+- **appraisal-1.png box count:** closed, not a gap — see "Visualizing
+  detections" above and `docs/algorithm-known-issues.md` issue #5. A full
+  visual audit found 118 to be correct; the "~125" estimate had no
+  verifiable source.
 - **Containment check sufficiency:** the design's reserved fallback
   (Canny + `HoughLinesP` diagonal-stroke detection as an additional
   classification signal) was deliberately not built, since the simpler

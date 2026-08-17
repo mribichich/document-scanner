@@ -201,9 +201,41 @@ misclassified) — so the 118 count itself was unaffected by fixing #3.
 appraisal-4, but appraisal-1's count didn't move at all — the README's
 working theory (gridline fusion) evidently isn't the same mechanism #2
 fixed, or isn't present on appraisal-1 in a way adaptive thresholding
-reaches. Still open, still unexplained; would need a fresh pixel-level
-investigation on appraisal-1 specifically (find where the ~7 missing boxes
-would be, same method as #1/#2/#3), not assumed fixed by association.
+reaches.
+
+**Investigated fully, 2026-08-17 — closed, not a real gap.** Two lines of
+evidence, both against the "~125" figure rather than the detector:
+
+1. `docs/chatgpt.json` (123 boxes) was the suspected source of the "~125"
+   estimate, given the near-identical count. Checked directly this time
+   rather than assumed unrelated: its bounding boxes only span y=300-1349
+   of this 4200px-tall image (roughly the top third), and even restricted
+   to that same region our own detector only has 20 real candidates there
+   — not remotely close to 123. Tried matching its coordinates against our
+   real candidates at a range of uniform scale factors (2.7x-3.3x, since
+   its box sizes are ~1/3 of ours, suggesting a downscaled image was shown
+   to it) on both appraisal-1 and appraisal-3 (the only other sample with
+   matching pixel dimensions) — best case was 6/123 matched at IoU>0.3.
+   Confirms the existing session note: `chatgpt.json`'s coordinates aren't
+   pixel-grounded to any of our samples at all, so it cannot be the
+   origin of a reliable "~125" ground truth, whatever its actual source
+   was (the README only credits "a similar prior manual analysis," now
+   unverifiable).
+2. Full manual visual audit of the entire rendered page (all 4200px of
+   height, reviewed in six 700px sections against the current
+   `-annotated.png` output): every checkbox in every row — including the
+   dense Attic/Basement/Heating/Cooling/Amenities grid and the
+   Utilities/Zoning Compliance rows — has a drawn (red or green) box
+   around it. Zero visually-missing checkboxes found anywhere on the page,
+   and zero spurious boxes drawn where no real checkbox exists.
+
+**Conclusion:** 118 is very likely the correct count for this page. The
+"~125" figure has no verifiable source and shouldn't be treated as ground
+truth going forward — this is the same "reference data isn't ground truth"
+lesson as the ChatGPT-comparison caveat below, just for a number instead of
+a JSON file. Closed as investigated; reopen only if a future
+comparison source or manual review turns up a specific missing bbox (the
+standard this project holds every other finding to).
 
 ### 6. Classification (checked/unchecked) still breaks on shaded backgrounds
 
@@ -345,20 +377,50 @@ explanation of this case needs updating** — it no longer accurately
 describes the current failure mechanism (task not yet done — carried here
 as a known documentation gap, not fixed in this pass).
 
-**Attempted and rejected:** morphological closing (kernel sizes 2 and 3),
-intended to bridge the missing border segment — did not recover this box
-at all, and reduced the sample's total candidate count from ~41 to
+**Attempted and rejected (1):** morphological closing (kernel sizes 2 and
+3), intended to bridge the missing border segment — did not recover this
+box at all, and reduced the sample's total candidate count from ~41 to
 24-26 (real boxes elsewhere lost too), confirming it's too blunt an
 instrument applied image-wide. Not attempted as a scoped/local operation
 given the missing segment is large (a significant fraction of two sides),
 well beyond what a small-kernel close can bridge.
 
+**Attempted and rejected (2), 2026-08-17:** global Hough-line-based
+rectangle reconstruction, tolerant of partial occlusion — the technique
+flagged above as the likely fix. Implementation: `cv2.HoughLinesP` run
+once over the whole binary image, segments classified horizontal/vertical
+by angle (±8°), paired (top+bottom horizontal within `MIN_BOX_SIZE`..
+`MAX_BOX_SIZE` apart, x-ranges overlapping ≥50%) and confirmed by a
+vertical segment covering ≥50% of the height near either x boundary.
+Prototyped and traced by hand first: this box's own fragments genuinely do
+reconstruct correctly this way (bottom edge `(713,514)-(736,514)`, right
+edge `(734,517)-(737,486)` spanning nearly the full height, left edge
+`(713,507)-(713,491)` partial, top edge `(720,493)-(740,492)` partial — all
+consistent with one ~24x23 rectangle matching the ledger's estimate). But
+run over the full page, the same pairing logic that reconstructs this one
+real box also fires on every regularly-spaced pair of ruled table lines
+page-wide, since a form full of gridlines has enormous numbers of
+horizontal-pair-plus-connecting-vertical coincidences at checkbox scale.
+Measured on all 4 samples (candidates not already matched to an existing
+contour-based candidate, IoU > 0.3): appraisal-1 +349, appraisal-2 +17,
+appraisal-3 +345, appraisal-4 +487 spurious candidates — and on
+appraisal-2 specifically, **the target box wasn't even among the 17**
+(lost to its own dedup pass against nearby spurious matches). Rejected:
+worse than useless as implemented — massive false-positive rate without
+reliably solving the one case it was built for. A viable version would
+need much stronger scoping (e.g. only trigger in small, already-identified
+gap regions rather than globally, plus a way to distinguish an isolated
+checkbox-shaped gap from a repeating table-grid pattern) — enough
+additional heuristic surface that it risks overfitting to this one
+example, the exact failure mode this project's methodology exists to
+catch before shipping.
+
 **Severity:** High (this is the box that started the whole project), but
-genuinely hard — would need a fundamentally different candidate-detection
-technique (e.g. Hough-line-based rectangle detection, tolerant of partial
-occlusion, explicitly noted as a "reserved fallback" in the original
-design that was deliberately not built) rather than contour extraction,
-which requires a mostly-intact boundary. Open.
+genuinely hard — two structurally different techniques (morphological
+bridging, global Hough-line reconstruction) both tried and rejected on
+concrete evidence, not assumption. Any future attempt needs either a much
+more tightly scoped version of the Hough approach (see above) or a
+different technique entirely. Open.
 
 ### 10. Checkbox border obscured on all sides by an unusual "burst" mark pattern
 
@@ -426,11 +488,11 @@ throughout this project.
 | 2 | Shaded table-row backgrounds (appraisal-3, 18 boxes) | **Fixed** — adaptive threshold, 0 regressions |
 | 3 | Thin X-mark ink-ratio near-misses (appraisal-1, 4 boxes) | **Fixed** — diagonal-normalized ink density, +1 bonus fix, 0 regressions |
 | 4 | Ink-blob shape gate | Open, no real instance yet |
-| 5 | appraisal-1 118 vs ~125 | Open — re-checked after #2, unaffected, still unexplained |
+| 5 | appraisal-1 118 vs ~125 | **Closed** — full visual audit found 0 missing/spurious boxes; "~125" has no verifiable source and isn't ground truth |
 | 6 | Classification on shaded backgrounds | **Fixed**, same change as #2 |
 | 7 | Context/label awareness (OCR) | Open, not investigated |
 | 8 | Hand-drawn shape mimicking a checkbox silhouette | **Fixed** — rectangularity check, 0 regressions (after a caught-and-corrected first attempt) |
-| 9 | "No Zoning" scratch-line box still undetected | **Open** — failure mode changed (fragmentation, not fusion), 2 fix attempts rejected as too destructive |
+| 9 | "No Zoning" scratch-line box still undetected | **Open** — failure mode changed (fragmentation, not fusion), 2 fix attempts rejected (too destructive image-wide; global Hough reconstruction too false-positive-prone) |
 | 10 | "Electricity" burst-pattern mark obscures border on all sides | **Open** — 1 fix attempt rejected as too destructive |
 
 Current counts after #2/#3/#6/#8: appraisal-1 118/**37 checked** (was 33),
@@ -441,25 +503,24 @@ Full pytest suite: 35/35 passing.
 
 ## Remaining working order
 
-1. **#9 ("No Zoning")** — highest real-world value (the project's original
-   motivating case) but needs a genuinely different technique
-   (Hough-line-based rectangle detection tolerant of partial occlusion),
-   not another contour-extraction tweak. Update the README's existing
-   explanation of this case to match the new (post-adaptive-threshold)
-   failure mode before attempting a fix, so the next attempt targets the
-   right mechanism.
-2. **#4 (ink-blob shape gate)** — needs a synthetic reproduction case
+1. **#4 (ink-blob shape gate)** — needs a synthetic reproduction case
    first, since no real instance exists yet in the sample set.
-3. **#5** — needs fresh investigation on appraisal-1 specifically; #2
-   didn't move this count, so the working theory (gridline fusion) needs
-   re-examination, not just a re-run.
-4. **#10 ("Electricity" burst pattern)** — same technique gap as #9, lower
+2. **#9 ("No Zoning")** — highest real-world value (the project's original
+   motivating case), but two structurally different techniques are now
+   both rejected on evidence (see issue body). Needs either a much more
+   tightly scoped Hough reconstruction (triggered only in small,
+   already-identified gap regions, with a way to reject repeating
+   table-grid patterns) or a different technique entirely — not
+   attempted further without a concrete new idea, to avoid
+   overfitting a heuristic to this one example. Also still carries the
+   README documentation-gap task (its existing explanation is stale).
+3. **#10 ("Electricity" burst pattern)** — same technique gap as #9, lower
    priority given it's a single, unusual instance.
-5. **#1** — no clear next step; would need a fundamentally different
+4. **#1** — no clear next step; would need a fundamentally different
    technique (edge/gradient detection, or morphological gap-bridging) than
    anything else in this document, not a parameter change. Lowest priority
    unless more instances turn up (only 2 known).
-6. **#7 (context/label awareness)** — separate, larger investigation, not
+5. **#7 (context/label awareness)** — separate, larger investigation, not
    blocked on or blocking anything above.
 
 Every fix here should follow the project's established pattern: reproduce
