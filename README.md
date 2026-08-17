@@ -246,18 +246,41 @@ secrets. The IAM user and policies from step 1 are the same either way.
 > credentials to create or rotate per person. CI/CD should similarly move
 > to an OIDC-federated role rather than a static access key.
 
-> **Related follow-up:** the `EcrManageDetectCvRepo` statement in
-> `infra/bootstrap-iam-policy.json` uses `"Action": "ecr:*"` (still scoped
-> to just this project's own repo ARN, not account-wide) rather than an
-> explicit action list like every other statement in that file. That's a
-> deliberate compromise, not an oversight: AWS caps inline IAM user
-> policies at 2048 bytes, and the fully-enumerated ECR action list didn't
-> fit alongside everything else already in this policy. A cleaner fix is
-> converting this whole file from an inline user policy to a
-> customer-managed policy (6144-byte limit, room for full enumeration) —
-> which is really the same underlying problem as the IAM Identity Center
-> TODO above: this bootstrap-deploy-user pattern is already straining at
-> its edges for a single-developer setup.
+> **Related follow-up:** several statements in `infra/bootstrap-iam-policy.json`
+> (`EcrManageDetectRepo`, `LambdaManageFunction`, `IamPassAndManageLambdaExecRole`,
+> the merged S3/CloudWatch Logs statements) use a wildcarded action
+> (`"ecr:*"`, `"lambda:*"`, etc., each still scoped to just this project's
+> own resource ARN pattern, never account-wide) rather than an explicit
+> action list. That's a deliberate compromise, not an oversight, and it
+> got more aggressive over time under real pressure: AWS caps inline IAM
+> user policies at 2048 bytes, and adding `ecr:SetRepositoryPolicy` (etc.,
+> needed to fix the ECR-repository-policy issue below) pushed the
+> fully-enumerated version over that limit — confirmed live via a real
+> `LimitExceeded` error while trying to apply it, not a theoretical
+> concern. A cleaner fix is converting this whole file from an inline user
+> policy to a customer-managed policy (6144-byte limit, room for full
+> enumeration) — which is really the same underlying problem as the IAM
+> Identity Center TODO above: this bootstrap-deploy-user pattern is
+> already straining at its edges for a single-developer setup.
+
+> **Gotcha (confirmed live, cost ~30 minutes to diagnose):** after
+> renaming/recreating the Lambda's ECR repository (e.g. the `-cv` suffix
+> removal that happened alongside this repo's Go-Lambda removal — see git
+> history), `terraform apply` may fail creating the Lambda function with
+> `AccessDeniedException: Lambda does not have permission to access the
+> ECR image. Check the ECR permissions.` This is **not** simple
+> propagation delay (ruled out with 11+ retries over ~20 minutes, spaced
+> up to 45s apart) and **not** a stale image (ruled out by rebuilding and
+> re-pushing a completely fresh image — same failure) and **not** about
+> IAM role identity (ruled out by testing with a brand-new, never-before-used
+> role — same failure). The actual fix: a **brand-new ECR repository needs
+> an explicit repository policy granting the Lambda service principal pull
+> access** (`aws_ecr_repository_policy` in `infra/detect.tf`, statement
+> `LambdaECRImageRetrievalPolicy`) — same-account "implicit" access isn't
+> reliable enough to depend on. If this error recurs after some other
+> resource rename in the future, check that this repository policy exists
+> and is attached to whatever the current repository is before assuming
+> it's propagation delay again.
 
 ## Deploy
 

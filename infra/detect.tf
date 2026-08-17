@@ -1,9 +1,44 @@
 # --- Detect Lambda (Python, container image) -------------------------------
 
+data "aws_caller_identity" "current" {}
+
 resource "aws_ecr_repository" "detect" {
   name                 = "${local.name_prefix}-detect"
   image_tag_mutability = "MUTABLE"
   force_delete         = true
+}
+
+# Grants the Lambda service permission to pull from this specific repo.
+# Confirmed necessary the hard way: after renaming this repo (previously
+# document-scanner-dev-detect-cv, which never needed this), Lambda's
+# CreateFunction consistently failed with "AccessDeniedException: Lambda
+# does not have permission to access the ECR image" - ruled out image
+# staleness (rebuilt and re-pushed a fresh image, same failure) and IAM
+# role identity (tested with a brand-new, never-before-used role, same
+# failure) before landing on this as the actual fix. AWS's own same-
+# account "implicit" ECR access for Lambda evidently isn't reliable
+# enough to depend on; an explicit repository policy is the documented,
+# supported way to grant this.
+resource "aws_ecr_repository_policy" "detect_lambda_pull" {
+  repository = aws_ecr_repository.detect.name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "LambdaECRImageRetrievalPolicy"
+      Effect    = "Allow"
+      Principal = { Service = "lambda.amazonaws.com" }
+      Action = [
+        "ecr:BatchGetImage",
+        "ecr:GetDownloadUrlForLayer",
+      ]
+      Condition = {
+        StringLike = {
+          "aws:sourceArn" = "arn:aws:lambda:${var.aws_region}:${data.aws_caller_identity.current.account_id}:function:*"
+        }
+      }
+    }]
+  })
 }
 
 resource "null_resource" "build_and_push_detect_image" {
@@ -90,6 +125,7 @@ resource "aws_lambda_function" "detect" {
   depends_on = [
     aws_cloudwatch_log_group.detect_lambda,
     aws_iam_role_policy_attachment.detect_basic_execution,
+    aws_ecr_repository_policy.detect_lambda_pull,
   ]
 }
 
