@@ -649,14 +649,14 @@ it — `force_delete = true` on `aws_ecr_repository.detect` so
 
 ## Next steps
 
-Both detection implementations are wired in, deployed behind the same API
-Gateway, and validated against all 4 sample images, including a visual
-accuracy review of each (see "Visualizing detections" above). The CV
-pipeline fixes both of the two concrete Textract failure cases that
-motivated building it — including the appraisal-2 scratch-line case,
-which took a second, different mechanism (Textract-hint gap recovery, not
-another pixel/geometry fix) to actually close; see the first item below
-for what that took.
+The CV detection pipeline is deployed behind the API Gateway and
+validated against all 4 sample images, including a visual accuracy review
+of each (see "Visualizing detections" above). It fixes both of the two
+concrete Textract failure cases that originally motivated building it —
+including the appraisal-2 scratch-line case, which took a second,
+different mechanism (Textract-hint gap recovery, not another
+pixel/geometry fix) to actually close; see the first item below for what
+that took.
 
 **The original Go/Textract-only implementation (`/detect-textract`) was
 removed 2026-08-17**, once the CV pipeline's own Textract-hint gap
