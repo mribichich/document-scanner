@@ -131,14 +131,37 @@ file, not just this one:** hand-drawn/printed marks vary — a line could be
 thinner, bolder, or lighter across different documents/scanners — so any
 single fixed cutoff (`INK_RATIO_THRESHOLD`, `BINARY_THRESHOLD`,
 `MIN_EXTENT_RATIO`, adaptive threshold's own blockSize/C) is calibrated to
-this sample set's specific rendering, not provably general. Adaptive
-thresholding (issue #1/#2's fix) helps the *detection* side because it
-reasons about local contrast rather than one absolute pixel value, which is
-inherently more tolerant of lighter/bolder rendering. It does **not** fix
-this for *classification* — `INK_RATIO_THRESHOLD` is still one fixed
-number regardless of stroke width. No fully scale/weight-invariant fix is
-proposed yet for this issue; flagging the tension explicitly rather than
-picking a threshold number and calling it solved.
+this sample set's specific rendering, not provably general.
+
+**FIXED 2026-08-16.** Took the "relative/shape-aware measure" path flagged
+above rather than nudging the constant: replaced `_ink_ratio`
+(dark-pixel-count / box **area**) with `_ink_density` (dark-pixel-count /
+box **diagonal**), `INK_DENSITY_THRESHOLD = 1.5`. The area-based measure
+was never scale-invariant — a fixed-width stroke's pixel count scales
+roughly linearly with box size (it's still just a line), but area scales
+quadratically, so the identical confident mark reads as a much lower
+"ratio" in a bigger box. Diagonal-length normalization removes that
+size-dependent penalty. Validated against **every** box in all 4 real
+samples before picking the threshold value (not just the 4 known cases):
+plotted both measures for all ~285 boxes across box sizes 24-57px, found a
+clean, wide gap between the "genuinely empty" cluster (max ~1.10,
+including several boxes with nonzero noise from anti-aliasing/adaptive-
+threshold artifacts near borders) and the "real mark" cluster (min ~2.0,
+up to ~7+ in appraisal-4's smaller/bolder-relative boxes) — 1.5 sits in
+the middle of that gap with real margin on both sides, not chosen to
+exactly split the 4 known cases. Before trusting a nonzero-but-unchecked
+cluster as noise rather than a missed real mark, cropped and visually
+confirmed one (an appraisal-4 box with `ink_density≈1.10` — genuinely
+empty). Result: recovers all 4 appraisal-1 X-marks *and* an unexpected
+bonus — one appraisal-4 box previously misclassified `checked` by the old
+area-based measure (`ink_ratio=0.085`, just over the old 0.08 cutoff) is
+visually confirmed empty and now correctly classifies `unchecked`. Net:
++4 true positives, +1 true negative, 0 regressions. One test
+(`test_unchecked_when_external_line_passes_through`) needed its line
+thickness bumped (2px→4px) to keep clearing the new ink gate with margin —
+otherwise it was accidentally passing for the wrong reason (rejected by
+the ink gate itself, not by the `_mark_is_contained` logic it exists to
+exercise). 34/34 tests passing.
 
 ### 4. Isolated ink blobs pass the containment check with no shape requirement
 
@@ -293,34 +316,29 @@ throughout this project.
 |---|---|---|
 | 1 | Faint/light-gray borders (2 cases on appraisal-2) | **Open** — genuinely faint on all 4 sides, no threshold parameter fix found |
 | 2 | Shaded table-row backgrounds (appraisal-3, 18 boxes) | **Fixed** — adaptive threshold, 0 regressions |
-| 3 | Thin X-mark ink-ratio near-misses (appraisal-1, 4 boxes) | Open |
+| 3 | Thin X-mark ink-ratio near-misses (appraisal-1, 4 boxes) | **Fixed** — diagonal-normalized ink density, +1 bonus fix, 0 regressions |
 | 4 | Ink-blob shape gate | Open, no real instance yet |
 | 5 | appraisal-1 118 vs ~125 | Open — re-checked after #2, unaffected, still unexplained |
 | 6 | Classification on shaded backgrounds | **Fixed**, same change as #2 |
 | 7 | Context/label awareness (OCR) | Open, not investigated |
 
-New counts after #2/#6: appraisal-1 118/33 checked (unchanged), appraisal-2
-41/17 checked (unchanged), appraisal-3 **48/12 checked** (was 30/8),
-appraisal-4 **79/29 checked** (was 77/25). Full pytest suite: 34/34
-passing (32 pre-existing + 2 new shaded-background regression tests).
+Current counts after #2/#3/#6: appraisal-1 118/**37 checked** (was 33),
+appraisal-2 41/17 checked (unchanged), appraisal-3 48/12 checked
+(unchanged since #2/#6), appraisal-4 79/**28 checked** (was 29 — #3's
+bonus fix corrected one false positive). Full pytest suite: 34/34 passing.
 
 ## Remaining working order
 
-1. **#3 (ink-ratio threshold)** — independent of everything above, needs
-   the full-sample re-verification described in that section before
-   landing; the user's "don't over-fit to one threshold value" concern
-   applies most directly here since a bare constant tweak is the weakest
-   version of a fix.
-2. **#4 (ink-blob shape gate)** — needs a synthetic reproduction case
+1. **#4 (ink-blob shape gate)** — needs a synthetic reproduction case
    first, since no real instance exists yet in the sample set.
-3. **#5** — needs fresh investigation on appraisal-1 specifically; #2
+2. **#5** — needs fresh investigation on appraisal-1 specifically; #2
    didn't move this count, so the working theory (gridline fusion) needs
    re-examination, not just a re-run.
-4. **#1** — no clear next step; would need a fundamentally different
+3. **#1** — no clear next step; would need a fundamentally different
    technique (edge/gradient detection, or morphological gap-bridging) than
    anything else in this document, not a parameter change. Lowest priority
    unless more instances turn up (only 2 known).
-5. **#7 (context/label awareness)** — separate, larger investigation, not
+4. **#7 (context/label awareness)** — separate, larger investigation, not
    blocked on or blocking anything above.
 
 Every fix here should follow the project's established pattern: reproduce

@@ -123,7 +123,12 @@ def test_unchecked_when_external_line_passes_through():
     cv2.rectangle(gray, (50, 50), (70, 70), color=0, thickness=2)
     # A long line spanning far beyond the box on both sides, incidentally
     # crossing straight through its interior — must NOT be read as a check.
-    cv2.line(gray, (0, 60), (299, 60), color=0, thickness=2)
+    # Thickness 4 (not 2) deliberately clears INK_DENSITY_THRESHOLD with
+    # real margin (measured ~2.97 vs the 1.5 threshold), so this line is
+    # rejected by _mark_is_contained's containment logic — the thing this
+    # test exists to exercise — not by the ink-density gate short-circuiting
+    # before containment is ever reached.
+    cv2.line(gray, (0, 60), (299, 60), color=0, thickness=4)
 
     assert is_checked(_adaptive_binary(gray), (50, 50, 20, 20)) is False
 

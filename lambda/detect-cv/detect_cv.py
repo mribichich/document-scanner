@@ -186,7 +186,28 @@ def deduplicate_boxes(
     return kept
 
 
-INK_RATIO_THRESHOLD = 0.08
+# A raw dark-pixel-fraction-of-area measure (the previous approach) is not
+# scale-invariant for stroke-based marks: a fixed-width diagonal stroke's
+# pixel count scales with box *diagonal* (roughly linear in box size), but
+# area scales quadratically — so the same confident, unambiguous X mark
+# reads as a much lower "ink ratio" in a larger checkbox than an identical
+# stroke in a smaller one, purely as an artifact of box size, not mark
+# confidence. Confirmed empirically: 4 real X-marks on appraisal-1
+# (57x46px boxes) computed ink_ratio 0.075-0.077, just under the old
+# INK_RATIO_THRESHOLD=0.08, while every other real checked mark on that
+# same sample (identical box size) computed 0.087-0.112 — the mark itself
+# wasn't ambiguous, the area-based measure was penalizing it for the box's
+# size. Normalizing by box diagonal instead of box area removes that
+# size-dependent penalty: measured on all 4 real samples across box sizes
+# 24px to 57px, every genuinely empty box (including several with nonzero
+# noise from anti-aliasing/adaptive-threshold artifacts, e.g. 3 empty
+# appraisal-4 boxes measuring ink_density~1.10) stays well below 1.5, while
+# every real checked mark across every sample and box size measures at
+# least ~2.0 (appraisal-1's near-misses) up to ~7+ (appraisal-4's bold
+# marks in its smaller boxes) — a threshold anywhere in the wide gap
+# between those two clusters works; 1.5 sits roughly in the middle. See
+# docs/algorithm-known-issues.md issue #3.
+INK_DENSITY_THRESHOLD = 1.5
 INTERIOR_MARGIN = 3
 CONTAINMENT_PADDING_FACTOR = 2.0
 # Minimum fraction of a touching component's pixels that must fall inside
@@ -197,7 +218,7 @@ CONTAINMENT_PADDING_FACTOR = 2.0
 CONTAINMENT_INTERIOR_RATIO = 0.2
 
 
-def _ink_ratio(
+def _ink_density(
     binary_full: np.ndarray, box: tuple[int, int, int, int], margin: int = INTERIOR_MARGIN
 ) -> float:
     x, y, w, h = box
@@ -208,10 +229,10 @@ def _ink_ratio(
 
     interior = binary_full[y1:y2, x1:x2]
     dark_pixels = int(np.count_nonzero(interior))
-    total_pixels = interior.size
-    if total_pixels == 0:
+    diagonal = (w**2 + h**2) ** 0.5
+    if diagonal == 0:
         return 0.0
-    return dark_pixels / total_pixels
+    return dark_pixels / diagonal
 
 
 def _mark_is_contained(binary_full: np.ndarray, box: tuple[int, int, int, int]) -> bool:
@@ -297,7 +318,7 @@ def _mark_is_contained(binary_full: np.ndarray, box: tuple[int, int, int, int]) 
 
 
 def is_checked(binary_full: np.ndarray, box: tuple[int, int, int, int]) -> bool:
-    if _ink_ratio(binary_full, box) < INK_RATIO_THRESHOLD:
+    if _ink_density(binary_full, box) < INK_DENSITY_THRESHOLD:
         return False
     return _mark_is_contained(binary_full, box)
 
