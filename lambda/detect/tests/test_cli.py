@@ -7,12 +7,12 @@ from cli import make_run_timestamp, output_paths
 def test_output_paths_writes_into_given_results_dir():
     json_path, png_path = output_paths(
         Path("samples/appraisal-1.png"),
-        Path("samples/results/cv/20260816T120000Z"),
+        Path("samples/results/20260816T120000Z"),
     )
 
-    assert json_path == Path("samples/results/cv/20260816T120000Z/appraisal-1.json")
+    assert json_path == Path("samples/results/20260816T120000Z/appraisal-1.json")
     assert png_path == Path(
-        "samples/results/cv/20260816T120000Z/appraisal-1-annotated.png"
+        "samples/results/20260816T120000Z/appraisal-1-annotated.png"
     )
 
 
