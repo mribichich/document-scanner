@@ -283,6 +283,114 @@ idea itself. Needs its own scoped investigation (what OCR engine, cost/
 latency impact on the Lambda, false-positive-suppression vs. false-
 negative-recovery as separate sub-goals) before any implementation.
 
+### 8. Hand-drawn shapes can mimic a checkbox's 4-corner, correct-extent silhouette
+
+**Where:** `find_checkbox_candidates` — the corner-count/aspect-ratio/
+extent-ratio filters admit any quadrilateral, including a visibly skewed
+one.
+
+**Found:** 2026-08-17, user-supplied test case on `appraisal-2.png` near
+"Other (describe)" — a freehand flag/checkmark-like shape drawn without an
+actual box around it. Its own outer silhouette (ink boundary, not a
+printed rectangle) happened to approximate 4 corners closely enough to
+pass every existing filter, and was detected as a candidate and classified
+`checked`.
+
+**Root cause, precisely confirmed:** `approxPolyDP` returning 4 points only
+confirms corner *count*, not that those 4 points form an actual rectangle.
+The shape's 4 sides measured [25.0, 22.0, 25.5, 26.0]px — a 23% length
+mismatch between the two "opposite" 22.0/26.0 sides — and one corner
+deviated 11.5° from 90°, both far outside what any real printed checkbox
+border on any of the 4 samples measures.
+
+**FIXED 2026-08-17.** Added `_is_rectangular()`: rejects a candidate
+quadrilateral if its opposite-side length ratio falls below
+`MIN_RECTANGLE_SIDE_RATIO` or any corner deviates more than
+`MAX_RECTANGLE_ANGLE_DEVIATION_DEGREES` from 90°. Thresholds required two
+passes to get right — a first attempt (0.85 / 7°) was validated only
+against the fake shape's numbers and looked safe with wide margin, but
+re-running the full sample suite (this project's standing practice before
+trusting any fix) caught a real regression: a genuine, if slightly
+imperfectly rendered, printed checkbox on `appraisal-4.png` measured
+0.846/9.1° and was wrongly rejected. Corrected to `MIN_RECTANGLE_SIDE_RATIO
+= 0.8`, `MAX_RECTANGLE_ANGLE_DEVIATION_DEGREES = 10.0` — re-verified this
+keeps every real box across all 4 samples (the closest real call is that
+same 0.846/9.1° box) while still rejecting the fake shape on both metrics.
+Net effect: appraisal-2 41→40 boxes (17→16 checked, the fake shape
+removed); appraisal-1/3/4 unchanged. Added a regression test
+(`test_rejects_skewed_quadrilateral_hand_drawn_shape`) reproducing the
+same skewed-quadrilateral shape synthetically. 35/35 tests passing.
+
+### 9. "No Zoning" scratch-line box: still not detected, failure mode changed
+
+**Where:** `find_checkbox_candidates`.
+
+**Found:** this is the box behind the *original* Textract false positive
+that motivated this entire CV pivot (README's "appraisal-2.png scratch
+line" known limitation, and Task 15's trace of the same coordinates).
+Re-confirmed 2026-08-17 by direct user inspection of the source image: the
+box (next to "No Zoning") is still not detected by the CV pipeline.
+
+**New finding:** the failure mode is not what the README currently
+describes. The README's existing text says the border+scratch fuse into
+one oversized (~859x31px) contour that fails the size filter — that was
+true under the old global `BINARY_THRESHOLD`. Under the new adaptive
+threshold (issue #2's fix), the mechanism is different: visually confirmed
+via the raw binary mask that a genuine portion of the box's own border
+(the top edge and part of the right edge, near where the scratch crosses)
+is **entirely absent** from the binary image, not fused with anything —
+the remaining border fragments are 3-6 sided, undersized shards that don't
+individually reconstruct a valid rectangle. **README's existing
+explanation of this case needs updating** — it no longer accurately
+describes the current failure mechanism (task not yet done — carried here
+as a known documentation gap, not fixed in this pass).
+
+**Attempted and rejected:** morphological closing (kernel sizes 2 and 3),
+intended to bridge the missing border segment — did not recover this box
+at all, and reduced the sample's total candidate count from ~41 to
+24-26 (real boxes elsewhere lost too), confirming it's too blunt an
+instrument applied image-wide. Not attempted as a scoped/local operation
+given the missing segment is large (a significant fraction of two sides),
+well beyond what a small-kernel close can bridge.
+
+**Severity:** High (this is the box that started the whole project), but
+genuinely hard — would need a fundamentally different candidate-detection
+technique (e.g. Hough-line-based rectangle detection, tolerant of partial
+occlusion, explicitly noted as a "reserved fallback" in the original
+design that was deliberately not built) rather than contour extraction,
+which requires a mostly-intact boundary. Open.
+
+### 10. Checkbox border obscured on all sides by an unusual "burst" mark pattern
+
+**Where:** `find_checkbox_candidates`.
+
+**Found:** 2026-08-17, user-supplied finding on `appraisal-2.png`, the
+"Electricity" row's "Public" checkbox. The mark inside is an unusual
+pattern — a center X with additional short radiating dash strokes — whose
+arms extend out and touch the border on all four sides.
+
+**Root cause, precisely confirmed:** visually confirmed via the raw binary
+mask that the border itself is fully intact (a complete rectangular
+loop) — unlike issue #9, nothing is missing. But because the mark's arms
+touch the border at multiple points, `cv2.findContours` returns one
+merged border+mark contour with a complex outer silhouette: 8 corners
+(not 4) and extent 0.214 (far below `MIN_EXTENT_RATIO=0.6`). Rejected by
+both the corner-count and extent filters before ever reaching
+classification.
+
+**Attempted and rejected:** erosion (kernel sizes 2 and 3), intended to
+thin and detach the mark's arms from the border while leaving the thicker
+border intact — far too destructive image-wide, collapsing the sample's
+total candidate count to 4 and then 0. Not viable even as a supplementary
+pass given how much it damages unrelated real candidates.
+
+**Severity:** Medium — a genuinely unusual mark pattern, no other instance
+of anything like it found across the other 3 samples. Same category of
+difficulty as #9 (needs a fundamentally different technique than
+contour-extraction-on-a-single-binary-pass), but lower priority given it's
+a single, unusual instance rather than the project's original motivating
+case. Open.
+
 ## Reference-data caveat: ChatGPT's own outputs are not ground truth
 
 While investigating #1, the same `docs/chatgpt2.json` comparison also
@@ -310,7 +418,7 @@ against the actual source image before treating either side as "right,"
 the same standard applied to every other finding in this document and
 throughout this project.
 
-## Status as of 2026-08-16
+## Status as of 2026-08-17
 
 | # | Issue | Status |
 |---|---|---|
@@ -321,24 +429,37 @@ throughout this project.
 | 5 | appraisal-1 118 vs ~125 | Open — re-checked after #2, unaffected, still unexplained |
 | 6 | Classification on shaded backgrounds | **Fixed**, same change as #2 |
 | 7 | Context/label awareness (OCR) | Open, not investigated |
+| 8 | Hand-drawn shape mimicking a checkbox silhouette | **Fixed** — rectangularity check, 0 regressions (after a caught-and-corrected first attempt) |
+| 9 | "No Zoning" scratch-line box still undetected | **Open** — failure mode changed (fragmentation, not fusion), 2 fix attempts rejected as too destructive |
+| 10 | "Electricity" burst-pattern mark obscures border on all sides | **Open** — 1 fix attempt rejected as too destructive |
 
-Current counts after #2/#3/#6: appraisal-1 118/**37 checked** (was 33),
-appraisal-2 41/17 checked (unchanged), appraisal-3 48/12 checked
-(unchanged since #2/#6), appraisal-4 79/**28 checked** (was 29 — #3's
-bonus fix corrected one false positive). Full pytest suite: 34/34 passing.
+Current counts after #2/#3/#6/#8: appraisal-1 118/**37 checked** (was 33),
+appraisal-2 **40/16 checked** (was 41/17 — #8 removed the fake-shape false
+positive), appraisal-3 48/12 checked (unchanged since #2/#6), appraisal-4
+79/**28 checked** (was 29 — #3's bonus fix corrected one false positive).
+Full pytest suite: 35/35 passing.
 
 ## Remaining working order
 
-1. **#4 (ink-blob shape gate)** — needs a synthetic reproduction case
+1. **#9 ("No Zoning")** — highest real-world value (the project's original
+   motivating case) but needs a genuinely different technique
+   (Hough-line-based rectangle detection tolerant of partial occlusion),
+   not another contour-extraction tweak. Update the README's existing
+   explanation of this case to match the new (post-adaptive-threshold)
+   failure mode before attempting a fix, so the next attempt targets the
+   right mechanism.
+2. **#4 (ink-blob shape gate)** — needs a synthetic reproduction case
    first, since no real instance exists yet in the sample set.
-2. **#5** — needs fresh investigation on appraisal-1 specifically; #2
+3. **#5** — needs fresh investigation on appraisal-1 specifically; #2
    didn't move this count, so the working theory (gridline fusion) needs
    re-examination, not just a re-run.
-3. **#1** — no clear next step; would need a fundamentally different
+4. **#10 ("Electricity" burst pattern)** — same technique gap as #9, lower
+   priority given it's a single, unusual instance.
+5. **#1** — no clear next step; would need a fundamentally different
    technique (edge/gradient detection, or morphological gap-bridging) than
    anything else in this document, not a parameter change. Lowest priority
    unless more instances turn up (only 2 known).
-4. **#7 (context/label awareness)** — separate, larger investigation, not
+6. **#7 (context/label awareness)** — separate, larger investigation, not
    blocked on or blocking anything above.
 
 Every fix here should follow the project's established pattern: reproduce
@@ -346,4 +467,8 @@ concretely (pixel data or a synthetic case, not assertion), fix, add a
 regression test, re-run the full local sample calibration (not just the
 unit suite) to confirm no new false positive/negative was introduced on
 the other 3 samples, then redeploy and verify live before considering it
-done.
+done. **#8 is a direct example of why the full-sample re-run step is
+non-negotiable** — the first threshold choice looked safe by every check
+available at the time (validated against the one known bad example with
+what seemed like wide margin) and still turned out to reject a real box;
+only the full re-run caught it.

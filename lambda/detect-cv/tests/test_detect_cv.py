@@ -78,6 +78,29 @@ def test_rejects_low_rectangularity_filled_shape():
     assert len(candidates) == 0
 
 
+def test_rejects_skewed_quadrilateral_hand_drawn_shape():
+    # Regression test: a hand-drawn shape (e.g. a freehand checkmark/flag
+    # drawn without a real box around it) can have an outer silhouette
+    # that's a 4-cornered, checkbox-sized, reasonably-square-aspect,
+    # sufficiently-filled quadrilateral — passing every other filter — while
+    # visibly not being an actual rectangle. Found on a real sample
+    # (appraisal-2.png, near "Other (describe)"): a drawn shape measured
+    # side-ratio 0.767, corner-angle deviation 11.5 degrees, and was
+    # detected as a checkbox candidate (then classified checked) before
+    # this fix. This synthetic shape reproduces the same failure mode: a
+    # visibly skewed (non-rectangular) quadrilateral outline, all sides
+    # unequal enough that opposite-side length ratio and corner angles both
+    # fall outside a real rectangle's tolerance, while size/aspect/corner-
+    # count/extent all still pass.
+    gray = make_blank_gray()
+    skewed = np.array([[50, 51], [51, 72], [78, 69], [76, 53]], dtype=np.int32)
+    cv2.polylines(gray, [skewed], isClosed=True, color=0, thickness=3)
+
+    candidates = find_checkbox_candidates(gray)
+
+    assert len(candidates) == 0
+
+
 from detect_cv import deduplicate_boxes
 
 

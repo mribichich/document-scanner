@@ -18,14 +18,16 @@ review of every checkbox on every page:
   itself — Textract has its own known false positive (the original
   scratch-mark bug, still live, see "Reference-data caveat" in
   `algorithm-known-issues.md`).
-- Only `appraisal-2.png` has been cross-checked against a second,
-  independent source (`docs/chatgpt2.json`, a ChatGPT vision detection).
-  `appraisal-1/3/4` have not had this second cross-check yet — an
-  independent check on those could surface more misses the Textract
-  comparison didn't catch, the way it did for appraisal-2.
-- No sample has had a full manual box-by-box review against the source
-  image. **Absence from this list means "not yet found," not "confirmed
-  correct."**
+- `appraisal-2.png` has additionally been cross-checked against a second,
+  independent source (`docs/chatgpt2.json`, a ChatGPT vision detection)
+  and had a **direct manual review by the project owner** against the
+  rendered source image (2026-08-17, 4 findings, 3 real + 1 confirmed
+  false positive — see its table below). `appraisal-1/3/4` have not had
+  either a second cross-check or a manual review yet — either could surface
+  more misses, the way both did for appraisal-2.
+- No sample other than appraisal-2 has had a full manual box-by-box review
+  against the source image. **Absence from this list means "not yet
+  found," not "confirmed correct."**
 
 ## appraisal-1.png (2550x4200, target ~125 real checkboxes)
 
@@ -41,8 +43,11 @@ review of every checkbox on every page:
 
 | bbox | Problem | Status | Issue |
 |---|---|---|---|
-| `[281,187,307,210]` | Candidate detection miss — border ~gray 223, faint on all 4 sides | **Open** — no threshold parameter recovers it; needs a different technique | [#1](algorithm-known-issues.md#1-global-binary-threshold-misses-faintlight-gray-checkbox-borders) |
+| `[281,187,307,210]` ("Neighborhood Boundaries") | Candidate detection miss — border ~gray 223, faint on all 4 sides | **Open** — no threshold parameter recovers it; needs a different technique. Independently reconfirmed by direct user inspection 2026-08-17 | [#1](algorithm-known-issues.md#1-global-binary-threshold-misses-faintlight-gray-checkbox-borders) |
 | `[1098,491,1122,515]` | Candidate detection miss, same cause | **Open** | #1 |
+| `~[715,490,738,514]` ("No Zoning") | Candidate detection miss — the project's original motivating case (scratch line through the box). Failure mode changed under adaptive thresholding: border fragments into 3-6-sided undersized shards (confirmed via raw binary mask), not the old single-oversized-blob fusion the README still describes | **Open** — 2 fix attempts (morphological closing, kernel 2/3) rejected, too destructive image-wide (~41→24-26 candidates lost everywhere) | [#9](algorithm-known-issues.md#9-no-zoning-scratch-line-box-still-not-detected-failure-mode-changed) |
+| `~[196,613,220,637]` ("Electricity" / "Public") | Candidate detection miss — border intact but an unusual radiating "burst" mark pattern touches it on all 4 sides, merging into one 8-corner, extent-0.214 blob | **Open** — 1 fix attempt (erosion, kernel 2/3) rejected, too destructive image-wide (~41→0-4 candidates) | [#10](algorithm-known-issues.md#10-checkbox-border-obscured-on-all-sides-by-an-unusual-burst-mark-pattern) |
+| `[809,613,838,636]` (near "Other (describe)") | False positive — a hand-drawn shape (not a real printed checkbox) whose outer silhouette happened to pass every geometric filter; previously misdescribed in this project's own Task 17 notes as "a real, unambiguous hand-drawn check mark" — it is not a real form checkbox at all, confirmed by the project owner | **Fixed** 2026-08-17 — rectangularity check (side-length ratio + corner-angle deviation) | [#8](algorithm-known-issues.md#8-hand-drawn-shapes-can-mimic-a-checkboxs-4-corner-correct-extent-silhouette) |
 
 ## appraisal-3.png (2550x4200)
 

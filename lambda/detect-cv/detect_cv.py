@@ -1,3 +1,5 @@
+import math
+
 import cv2
 import numpy as np
 
@@ -117,6 +119,51 @@ def _probe_dimensions(image_bytes: bytes) -> tuple[int, int] | None:
     return None
 
 
+# A 4-corner polygon (the corner-count filter above) admits any
+# quadrilateral, including a visibly skewed one — a hand-drawn shape (e.g.
+# a thick freehand checkmark/flag whose own outer silhouette happens to
+# have 4 dominant corners) can pass corner-count, size, aspect-ratio, and
+# extent-ratio filters while being nowhere near an actual rectangle. A
+# printed checkbox border is a precise rectangle: opposite sides equal
+# length, corners at ~90°. Reject quadrilaterals that visibly aren't.
+#
+# Thresholds validated against every current candidate across all 4 real
+# samples (~285 boxes), ranked by side-ratio, not fit to one example: a
+# real hand-drawn test case (a freehand flag/checkmark shape drawn without
+# a box, appraisal-2.png near "Other (describe)") measured ratio=0.767,
+# angle_dev=11.5° — clearly the worst of every candidate. The next-worst
+# is a real, if imperfectly rendered, printed checkbox (appraisal-4.png)
+# at ratio=0.846, angle_dev=9.1° — an earlier, tighter pair of thresholds
+# (0.85/7°) rejected this real box outright (a confirmed false-negative
+# regression, caught by re-running the full sample suite before trusting
+# the fix, not assumed safe from the fake shape alone). These values leave
+# real margin on both sides of that real box's numbers while still
+# rejecting the fake shape on both metrics.
+MIN_RECTANGLE_SIDE_RATIO = 0.8
+MAX_RECTANGLE_ANGLE_DEVIATION_DEGREES = 10.0
+
+
+def _is_rectangular(approx: np.ndarray) -> bool:
+    pts = approx.reshape(-1, 2).astype(float)
+    sides = [float(np.linalg.norm(pts[(i + 1) % 4] - pts[i])) for i in range(4)]
+    side_ratio = min(
+        min(sides[0], sides[2]) / max(sides[0], sides[2]),
+        min(sides[1], sides[3]) / max(sides[1], sides[3]),
+    )
+    if side_ratio < MIN_RECTANGLE_SIDE_RATIO:
+        return False
+
+    for i in range(4):
+        prev_pt, cur_pt, next_pt = pts[(i - 1) % 4], pts[i], pts[(i + 1) % 4]
+        v1, v2 = prev_pt - cur_pt, next_pt - cur_pt
+        cos_angle = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2) + 1e-9)
+        angle_degrees = math.degrees(math.acos(np.clip(cos_angle, -1.0, 1.0)))
+        if abs(angle_degrees - 90.0) > MAX_RECTANGLE_ANGLE_DEVIATION_DEGREES:
+            return False
+
+    return True
+
+
 def find_checkbox_candidates(gray: np.ndarray) -> list[tuple[int, int, int, int]]:
     binary = _adaptive_binary(gray)
     contours, _ = cv2.findContours(binary, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
@@ -132,6 +179,8 @@ def find_checkbox_candidates(gray: np.ndarray) -> list[tuple[int, int, int, int]
         perimeter = cv2.arcLength(contour, True)
         approx = cv2.approxPolyDP(contour, CORNER_EPSILON_FACTOR * perimeter, True)
         if len(approx) != 4:
+            continue
+        if not _is_rectangular(approx):
             continue
         # A real checkbox's contour (the outer or inner edge of a drawn
         # square) fills nearly all of its own bounding box. A text glyph
