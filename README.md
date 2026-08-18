@@ -1,8 +1,11 @@
 # document-scanner
 
 Checkbox detection API. Given a document image, detects checkboxes and
-classifies each as checked or unchecked. See `challenge.pdf` (pages 1-2) for
-the full spec.
+classifies each as checked or unchecked — built for dense, scanned forms
+(e.g. mortgage/appraisal paperwork) where manually reviewing every
+checkbox doesn't scale and generic OCR checkbox recognition is
+unreliable (see "Architecture" below). See `challenge.pdf` (pages 1-2)
+for the full spec.
 
 ## API
 
@@ -10,7 +13,11 @@ the full spec.
 POST /detect
 ```
 
-- **Input:** a document image, sent as a file upload.
+- **Input:** a document image, sent as a file upload (`multipart/form-data`)
+  or as a raw request body with an image `Content-Type`. Accepted formats:
+  PNG, JPEG, BMP, TIFF, WebP (`image/png`, `image/jpeg`, `image/jpg`,
+  `image/bmp`, `image/tiff`, `image/webp`), or `application/octet-stream`
+  for a raw upload with no specific type set.
 - **Output:**
 
   ```json
