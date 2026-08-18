@@ -83,8 +83,7 @@
       "Sid": "TextractTestingAccess",
       "Effect": "Allow",
       "Action": [
-        "textract:AnalyzeDocument",
-        "textract:DetectDocumentText"
+        "textract:AnalyzeDocument"
       ],
       "Resource": "*"
     },

@@ -6,12 +6,29 @@ from email.parser import BytesParser
 
 from detect_cv import detect_checkboxes
 
+# Direct (non-multipart) uploads: the raw body is handed straight to
+# decode_image, which only accepts formats cv2.imdecode understands, so the
+# allowlist here just needs to match that — plus application/octet-stream
+# for callers that don't set a specific image content type.
+_ALLOWED_RAW_CONTENT_TYPES = frozenset(
+    {
+        "image/png",
+        "image/jpeg",
+        "image/jpg",
+        "image/bmp",
+        "image/tiff",
+        "image/webp",
+        "application/octet-stream",
+    }
+)
+
 
 def _extract_image_bytes(event: dict) -> bytes:
     headers = {k.lower(): v for k, v in (event.get("headers") or {}).items()}
     content_type = headers.get("content-type", "")
     if not content_type:
         raise ValueError("missing Content-Type header")
+    content_type_base = content_type.split(";", 1)[0].strip().lower()
 
     body = event.get("body") or ""
     if event.get("isBase64Encoded"):
@@ -19,7 +36,9 @@ def _extract_image_bytes(event: dict) -> bytes:
     else:
         raw_body = body.encode("utf-8") if isinstance(body, str) else body
 
-    if not content_type.startswith("multipart/"):
+    if not content_type_base.startswith("multipart/"):
+        if content_type_base not in _ALLOWED_RAW_CONTENT_TYPES:
+            raise ValueError(f"unsupported Content-Type: {content_type_base}")
         return raw_body
 
     header_bytes = f"Content-Type: {content_type}\r\n\r\n".encode("utf-8")

@@ -62,6 +62,31 @@ def test_raw_body_returned_when_not_multipart():
     assert result == b"raw-png-bytes"
 
 
+def test_raises_on_disallowed_content_type():
+    import pytest
+
+    event = {
+        "headers": {"content-type": "text/plain"},
+        "body": base64.b64encode(b"whatever").decode("ascii"),
+        "isBase64Encoded": True,
+    }
+
+    with pytest.raises(ValueError):
+        _extract_image_bytes(event)
+
+
+def test_handler_returns_400_for_disallowed_content_type():
+    event = {
+        "headers": {"content-type": "text/plain"},
+        "body": base64.b64encode(b"whatever").decode("ascii"),
+        "isBase64Encoded": True,
+    }
+
+    response = handler(event, None)
+
+    assert response["statusCode"] == 400
+
+
 def test_handler_returns_200_for_valid_raw_image():
     event = {
         "headers": {"content-type": "image/png"},

@@ -85,9 +85,76 @@ is still there for debugging without ever reaching the response.
 - `scripts/annotate_detections.py` — draws detected boxes over the sample
   images (green = checked, red = unchecked) for visualizing a
   `call_detect_api.sh` results folder. (`cli.py`'s local dev loop already
-  writes its own annotated output directly — see "Local development loop"
-  below — this script is for visualizing responses from the deployed
-  endpoint instead.)
+  writes its own annotated output directly — see "Run it locally" below —
+  this script is for visualizing responses from the deployed endpoint
+  instead.)
+
+## Try it now
+
+Two ways to see this work before touching AWS, Docker, or Terraform at all:
+
+### Run it locally
+
+`cli.py` runs the same detection code (`detect_cv.py`) directly against
+image files on disk — no Lambda, no API Gateway, no AWS account, no
+deploy. It's the fastest loop for seeing the algorithm work on real
+documents:
+
+```bash
+cd lambda/detect
+python3 -m venv venv && venv/bin/pip install -r requirements-dev.txt   # one-time, see Prerequisites
+venv/bin/python3 cli.py ../../samples
+```
+
+That runs it against the 4 bundled sample appraisal forms and writes, per
+image, into a fresh `samples/results/<timestamp>/` folder:
+
+- `<name>.json` — the raw `{"boxes": [...]}` response
+- `<name>-annotated.png` — the detected boxes drawn directly on the image
+  (green outline = `is_checked: true`, red = `false`), so you can see
+  whether it worked at a glance instead of reading raw coordinates
+
+(`<timestamp>` is a UTC value like `20260816T143022Z`, generated fresh
+each run, so successive runs never overwrite each other and can be
+diffed or eyeballed side by side. This tree is gitignored — it's local
+scratch output, not committed.) Point `cli.py` at any single image or
+folder of your own in place of `../../samples` to try it on other
+documents. This is also the loop used to calibrate the constants at the
+top of `detect_cv.py` (`MIN_BOX_SIZE`, `MAX_BOX_SIZE`, `MIN_EXTENT_RATIO`,
+etc.) — run it, eyeball the annotated PNGs, adjust a constant, repeat.
+
+No AWS credentials are required for this to run. The one exception:
+`detect_checkboxes` also calls Textract's FORMS analysis for
+gap-recovery hints (see "Architecture" above, and
+`docs/algorithm-known-issues.md` issue #7) — this is the one part of the
+pipeline that isn't purely local, but it fails open: missing/expired
+credentials just mean the run falls back to CV-only results (logged, not
+raised), so `cli.py` still works either way, just without the
+Textract-recovered boxes.
+
+The pytest suite (`tests/`) exercises the same code and never needs AWS
+credentials at all — it stubs the Textract call out:
+`venv/bin/python3 -m pytest` from `lambda/detect/`.
+
+### Or call the already-deployed endpoint
+
+No local setup at all — this hits a live, currently-deployed copy of this
+API directly:
+
+```bash
+curl -X POST https://quslj98to1.execute-api.us-east-1.amazonaws.com/detect \
+  -F "file=@/path/to/some-document.jpg" \
+  -w "\nHTTP %{http_code}\n"
+```
+
+This URL is whatever `terraform apply` last produced in the dev
+environment — a convenience snapshot for trying the API out, not a stable
+contract; it changes if the API Gateway resource is ever destroyed and
+recreated.
+
+Once you've deployed your own copy, "Testing" further down has more ways
+to exercise it: a folder of images at once, the 4 bundled samples with
+known-good counts to check against, and visualizing results.
 
 ## Prerequisites
 
@@ -118,8 +185,8 @@ versions, but a container runtime is a different kind of dependency, so
 install it the normal way for your OS.
 
 You don't need Docker just to run the algorithm locally, though — the
-`cli.py` dev loop (see "Local development loop" under Testing) only needs
-a plain Python virtualenv.
+`cli.py` dev loop (see "Run it locally" under "Try it now" above) only
+needs a plain Python virtualenv.
 
 ### Lambda (Python) dependencies
 
@@ -140,7 +207,7 @@ container image via `Dockerfile` (see "Docker" above and "Deploy" below).
 
 Run the tests with `venv/bin/python3 -m pytest` from `lambda/detect/`.
 Running `cli.py` (but not the test suite) also needs AWS credentials with
-`textract:AnalyzeDocument` — see "Local development loop" below.
+`textract:AnalyzeDocument` — see "Run it locally" above.
 
 ### AWS account setup (manual, one-time)
 
@@ -415,49 +482,10 @@ your own AWS account ID once the role exists
 
 ## Testing
 
-### Local development loop
-
-The fastest way to iterate on the algorithm itself is `cli.py`, which runs
-`detect_cv.py` directly against local files — no Lambda, no API Gateway,
-no deploy:
-
-```bash
-cd lambda/detect
-python3 -m venv venv && venv/bin/pip install -r requirements-dev.txt   # one-time, see Prerequisites
-venv/bin/python3 cli.py <image_or_folder>
-```
-
-**Needs AWS credentials with `textract:AnalyzeDocument`** (e.g.
-`AWS_PROFILE=document-scanner`) since `detect_checkboxes` also calls
-Textract's FORMS analysis for gap-recovery hints (see
-`docs/algorithm-known-issues.md` issue #7, `textract_hints.py`) — this is
-the one part of the pipeline that isn't purely local. It fails open:
-missing/expired credentials just mean the run falls back to CV-only
-results (logged, not raised), so `cli.py` still works without AWS
-configured, just without the Textract-recovered boxes. The pytest suite
-below does **not** need AWS credentials — it stubs this call out.
-
-For each image, it writes into a timestamped `results/<timestamp>/`
-subfolder alongside the input, so every run is kept separate from the last:
-
-- `<name>.json` — the raw `{"boxes": [...]}` response
-- `<name>-annotated.png` — the boxes drawn directly on the image
-  (green outline = `is_checked: true`, red = `false`), so you can eyeball
-  correctness immediately without a separate visualization step
-
-E.g. `venv/bin/python3 cli.py ../../samples` processes all 4 sample images
-and writes `samples/results/<timestamp>/appraisal-{1..4}.{json,png}`
-(`<timestamp>` is a UTC value like `20260816T143022Z`, generated fresh each
-run). This is the loop used to calibrate the constants at the top of
-`detect_cv.py` (`MIN_BOX_SIZE`, `MAX_BOX_SIZE`, `MIN_EXTENT_RATIO`, etc.) —
-run it, eyeball the annotated PNGs, adjust a constant, repeat. Because each
-run gets its own timestamped folder, you can diff or eyeball successive
-runs against each other instead of one overwriting the last. This whole
-tree (`samples/results/`) is gitignored — it's local scratch output, not
-committed.
-
-The pytest suite (`tests/`) covers the same code with unit/integration
-tests; run it with `venv/bin/python3 -m pytest` from `lambda/detect/`.
+See "Try it now" near the top for the fastest ways to run this with no
+setup at all — `cli.py` against local files, or `curl` against the live
+dev endpoint. Once you've deployed your own copy (see "Deploy" above),
+here's more ways to exercise it:
 
 ### Quick check with any image
 
@@ -466,23 +494,6 @@ curl -X POST "$(terraform -chdir=infra output -raw detect_endpoint)" \
   -F "file=@/path/to/some-document.jpg" \
   -w "\nHTTP %{http_code}\n"
 ```
-
-### Test against the live URL directly
-
-If you just want to hit the currently-deployed dev environment without
-running Terraform yourself, use its fixed endpoint:
-
-```bash
-curl -X POST https://quslj98to1.execute-api.us-east-1.amazonaws.com/detect \
-  -F "file=@/path/to/some-document.jpg" \
-  -w "\nHTTP %{http_code}\n"
-```
-
-This base URL is whatever `terraform apply` last produced in this
-account — it changes if the API Gateway resource is ever destroyed and
-recreated, so treat it as a convenience snapshot, not a stable contract.
-The authoritative value is always `terraform -chdir=infra output
-detect_endpoint`.
 
 ### Test against a folder of images
 
@@ -583,8 +594,8 @@ above to reproduce the numbers in the table.
 
 ### Visualizing detections
 
-The JSON alone is hard to sanity-check. `cli.py` (see "Local development
-loop" above) already writes
+The JSON alone is hard to sanity-check. `cli.py` (see "Run it locally"
+above) already writes
 `samples/results/<timestamp>/appraisal-{1..4}-annotated.png` as part of
 every run — no separate step needed. For visualizing a
 `call_detect_api.sh` results folder instead (e.g. from testing the live
@@ -619,13 +630,11 @@ A previously-documented gap on `appraisal-1.png` (118 detected against an
 estimate of ~125 expected, from an unverified prior manual analysis) was
 investigated further and closed 2026-08-17: a full manual visual audit of
 the entire rendered page found every checkbox correctly boxed and no
-spurious boxes, and the suspected source of the "~125" figure
-(`docs/chatgpt.json`) turned out not to be pixel-grounded to this image at
-any tested scale. 118 is very likely the correct count; see
-`docs/algorithm-known-issues.md` issue #5 for the full investigation.
-Ongoing algorithm work — root causes, evidence, and open items — is
-tracked in `docs/algorithm-known-issues.md` and `docs/detection-audit.md`,
-not here.
+spurious boxes, and the suspected source of the "~125" figure turned out
+to have no verifiable, pixel-grounded basis. 118 is very likely the
+correct count; see `docs/algorithm-known-issues.md` issue #5 for the full
+investigation. Ongoing algorithm work — root causes, evidence, and open
+items — is tracked in `docs/algorithm-known-issues.md`, not here.
 
 ## Viewing logs
 
@@ -743,7 +752,7 @@ Remaining ideas, roughly in priority order:
   containment check classifies it correctly with no changes needed.
   Revisit the Hough-line fallback if a document with a harder version of
   the "unrelated mark near a checkbox" problem is encountered. **Specific, currently-untested
-  gap** (found via an audit against `docs/chatgpt.md`): `is_checked()`
+  gap** (see `docs/algorithm-known-issues.md` issue #4): `is_checked()`
   requires ink coverage above a threshold and that enough of the touching
   ink's connected component falls within the box's own bounds
   (`CONTAINMENT_INTERIOR_RATIO`), but has no shape/structure requirement —

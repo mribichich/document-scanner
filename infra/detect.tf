@@ -93,8 +93,8 @@ resource "aws_iam_role_policy_attachment" "detect_basic_execution" {
 # (docs/algorithm-known-issues.md issue #7) - a pure enhancement over the
 # CV pipeline's own detection, never a requirement (detect_cv.py fails
 # open to CV-only results if this call fails for any reason).
-resource "aws_iam_role_policy" "detect_textract" {
-  name = "${local.name_prefix}-detect-textract"
+resource "aws_iam_role_policy" "detect_textract_access" {
+  name = "${local.name_prefix}-detect-textract-access"
   role = aws_iam_role.detect_exec.id
 
   # Textract API actions don't support resource-level ARNs; "*" is required.

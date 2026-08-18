@@ -10,10 +10,6 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
-    archive = {
-      source  = "hashicorp/archive"
-      version = "~> 2.4"
-    }
   }
 
   # Shared state (see infra/terraform_state.tf) so both a human deployer
