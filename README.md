@@ -96,57 +96,10 @@ is still there for debugging without ever reaching the response.
   this script is for visualizing responses from the deployed endpoint
   instead.)
 
-## Try it now
+## Live Demo
 
-Two ways to see this work before touching AWS, Docker, or Terraform at all:
-
-### Run it locally
-
-`cli.py` runs the same detection code (`detect_cv.py`) directly against
-image files on disk — no Lambda, no API Gateway, no AWS account, no
-deploy. It's the fastest loop for seeing the algorithm work on real
-documents:
-
-```bash
-cd lambda/detect
-python3 -m venv venv && venv/bin/pip install -r requirements-dev.txt   # one-time, see Prerequisites
-venv/bin/python3 cli.py ../../samples
-```
-
-That runs it against the 4 bundled sample appraisal forms and writes, per
-image, into a fresh `samples/results/<timestamp>/` folder:
-
-- `<name>.json` — the raw `{"boxes": [...]}` response
-- `<name>-annotated.png` — the detected boxes drawn directly on the image
-  (green outline = `is_checked: true`, red = `false`), so you can see
-  whether it worked at a glance instead of reading raw coordinates
-
-(`<timestamp>` is a UTC value like `20260816T143022Z`, generated fresh
-each run, so successive runs never overwrite each other and can be
-diffed or eyeballed side by side. This tree is gitignored — it's local
-scratch output, not committed.) Point `cli.py` at any single image or
-folder of your own in place of `../../samples` to try it on other
-documents. This is also the loop used to calibrate the constants at the
-top of `detect_cv.py` (`MIN_BOX_SIZE`, `MAX_BOX_SIZE`, `MIN_EXTENT_RATIO`,
-etc.) — run it, eyeball the annotated PNGs, adjust a constant, repeat.
-
-No AWS credentials are required for this to run. The one exception:
-`detect_checkboxes` also calls Textract's FORMS analysis for
-gap-recovery hints (see "Architecture" above, and
-`docs/algorithm-known-issues.md` issue #7) — this is the one part of the
-pipeline that isn't purely local, but it fails open: missing/expired
-credentials just mean the run falls back to CV-only results (logged, not
-raised), so `cli.py` still works either way, just without the
-Textract-recovered boxes.
-
-The pytest suite (`tests/`) exercises the same code and never needs AWS
-credentials at all — it stubs the Textract call out:
-`venv/bin/python3 -m pytest` from `lambda/detect/`.
-
-### Or call the already-deployed endpoint
-
-No local setup at all — this hits a live, currently-deployed copy of this
-API directly:
+No AWS account, Docker, or local setup required — this hits a live,
+currently-deployed copy of this API directly:
 
 ```bash
 curl -X POST https://quslj98to1.execute-api.us-east-1.amazonaws.com/detect \
@@ -161,7 +114,9 @@ recreated.
 
 Once you've deployed your own copy, "Testing" further down has more ways
 to exercise it: a folder of images at once, the 4 bundled samples with
-known-good counts to check against, and visualizing results.
+known-good counts to check against, and visualizing results. To run the
+detection code directly against local files instead — no AWS account or
+deploy needed at all — see "Run it locally" below, after "Prerequisites".
 
 ## Prerequisites
 
@@ -192,8 +147,8 @@ versions, but a container runtime is a different kind of dependency, so
 install it the normal way for your OS.
 
 You don't need Docker just to run the algorithm locally, though — the
-`cli.py` dev loop (see "Run it locally" under "Try it now" above) only
-needs a plain Python virtualenv.
+`cli.py` dev loop (see "Run it locally" below) only needs a plain Python
+virtualenv.
 
 ### Lambda (Python) dependencies
 
@@ -214,7 +169,7 @@ container image via `Dockerfile` (see "Docker" above and "Deploy" below).
 
 Run the tests with `venv/bin/python3 -m pytest` from `lambda/detect/`.
 Running `cli.py` (but not the test suite) also needs AWS credentials with
-`textract:AnalyzeDocument` — see "Run it locally" above.
+`textract:AnalyzeDocument` — see "Run it locally" below.
 
 ### AWS account setup (manual, one-time)
 
@@ -384,6 +339,49 @@ secrets. The IAM user and policies from step 1 are the same either way.
 > and is attached to whatever the current repository is before assuming
 > it's propagation delay again.
 
+## Run it locally
+
+`cli.py` runs the same detection code (`detect_cv.py`) directly against
+image files on disk — no Lambda, no API Gateway, no AWS account, no
+deploy. It's the fastest loop for seeing the algorithm work on real
+documents:
+
+```bash
+cd lambda/detect
+python3 -m venv venv && venv/bin/pip install -r requirements-dev.txt   # one-time, see Prerequisites above
+venv/bin/python3 cli.py ../../samples
+```
+
+That runs it against the 4 bundled sample appraisal forms and writes, per
+image, into a fresh `samples/results/<timestamp>/` folder:
+
+- `<name>.json` — the raw `{"boxes": [...]}` response
+- `<name>-annotated.png` — the detected boxes drawn directly on the image
+  (green outline = `is_checked: true`, red = `false`), so you can see
+  whether it worked at a glance instead of reading raw coordinates
+
+(`<timestamp>` is a UTC value like `20260816T143022Z`, generated fresh
+each run, so successive runs never overwrite each other and can be
+diffed or eyeballed side by side. This tree is gitignored — it's local
+scratch output, not committed.) Point `cli.py` at any single image or
+folder of your own in place of `../../samples` to try it on other
+documents. This is also the loop used to calibrate the constants at the
+top of `detect_cv.py` (`MIN_BOX_SIZE`, `MAX_BOX_SIZE`, `MIN_EXTENT_RATIO`,
+etc.) — run it, eyeball the annotated PNGs, adjust a constant, repeat.
+
+No AWS credentials are required for this to run. The one exception:
+`detect_checkboxes` also calls Textract's FORMS analysis for
+gap-recovery hints (see "Architecture" above, and
+`docs/algorithm-known-issues.md` issue #7) — this is the one part of the
+pipeline that isn't purely local, but it fails open: missing/expired
+credentials just mean the run falls back to CV-only results (logged, not
+raised), so `cli.py` still works either way, just without the
+Textract-recovered boxes.
+
+The pytest suite (`tests/`) exercises the same code and never needs AWS
+credentials at all — it stubs the Textract call out:
+`venv/bin/python3 -m pytest` from `lambda/detect/`.
+
 ## Deploy
 
 ```bash
@@ -489,10 +487,10 @@ your own AWS account ID once the role exists
 
 ## Testing
 
-See "Try it now" near the top for the fastest ways to run this with no
-setup at all — `cli.py` against local files, or `curl` against the live
-dev endpoint. Once you've deployed your own copy (see "Deploy" above),
-here's more ways to exercise it:
+See "Live Demo" near the top for the fastest way to run this with no
+setup at all — `curl` against the live dev endpoint — or "Run it locally"
+above for running `cli.py` against local files. Once you've deployed your
+own copy (see "Deploy" above), here's more ways to exercise it:
 
 ### Quick check with any image
 
